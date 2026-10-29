@@ -63,7 +63,7 @@ object SlackInteractionHandler {
             return
         }
         logger.debug("Received slash command: $text")
-        CommandManager.execute(responseUrl, text.trim().split(Regex("\\s+")))
+        CommandManager.execute(responseUrl, text.replace('+', ' ').trim().split(Regex("\\s+")))
     }
 
     private suspend fun handleBlockActions(json: JsonObject) {
