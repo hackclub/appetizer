@@ -62,6 +62,7 @@ object SlackInteractionHandler {
             SlackWorkflowService.sendHelpMessage(responseUrl)
             return
         }
+        logger.debug("Received slash command: $text")
         CommandManager.execute(responseUrl, text.trim().split(Regex("\\s+")))
     }
 
