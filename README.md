@@ -1,4 +1,6 @@
-# app-approver
+# Appetizer
+
+> Originally created by [Fantamomo](https://github.com/Fantamomo) as [app-approver](https://github.com/Fantamomo/app-approver).
 
 This is a Slack bot that handles the request approval process for a Slack organization.
 
