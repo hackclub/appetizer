@@ -48,7 +48,7 @@ object AppCommandManager {
         val name: String,
         val canonical_name: String? = null,
         val name_normalized: String? = null,
-        val type: String,
+        val type: String? = null,
         val app: String? = null
     )
 
@@ -110,6 +110,17 @@ object AppCommandManager {
                 !in setOf("app", "core") -> {
                     logger.error("Unknown command type: ${command.type}")
                     null
+                }
+
+                null -> {
+                    // this is new, type can be none existing in the response
+                    if (command.app == null && command.name_normalized == null && command.canonical_name == null) {
+                        // i think this happens when an app is deleted, but i dont know, because it is new
+                        return@mapNotNull null
+                    } else {
+                        logger.warn("Command with unknown type but with other properties: $command")
+                        return@mapNotNull null
+                    }
                 }
 
                 else -> command
