@@ -1,0 +1,1 @@
+ALTER TABLE settings ALTER COLUMN "name" TYPE VARCHAR(24);

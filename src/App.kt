@@ -67,6 +67,15 @@ object App {
             return@coroutineScope
         }
 
+        try {
+            SettingsManager.start()
+        } catch (e: Exception) {
+            logger.error("Failed to start settings manager", e)
+            return@coroutineScope
+        }
+
+        launch { SettingsManager.run() }
+
         if (Config.SOCKET_MODE) {
             launch {
                 SlackManager.connectViaSocket()

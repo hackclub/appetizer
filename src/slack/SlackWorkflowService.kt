@@ -5,12 +5,12 @@ import com.fantamomo.slack.approver.data.Constants.BULLET
 import com.fantamomo.slack.approver.data.Constants.MARKETPLACE_URL
 import com.fantamomo.slack.approver.decision.DecisionContext
 import com.fantamomo.slack.approver.manager.InstallRequestRepository
+import com.fantamomo.slack.approver.manager.SettingsManager
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.slack.api.model.block.element.RichTextSectionElement
 import com.slack.api.model.kotlin_extension.block.ActionsBlockBuilder
 import com.slack.api.model.kotlin_extension.block.dsl.LayoutBlockDsl
 import io.ktor.http.*
@@ -19,14 +19,27 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-import com.slack.api.model.block.element.RichTextSectionElement.TextStyle.builder as styleBuilder
 
 object SlackWorkflowService {
     private val logger = LoggerFactory.getLogger(SlackWorkflowService::class.java)
 
+    private const val MAX_ADMIN_RULES_SHOWN = 55
+
+    private const val MAX_TEST_INACTIVE_SHOWN = 40
+
     private val appHomeCheckCooldown = ConcurrentHashMap<String, Instant>()
 
-    private val homeAdminMode = ConcurrentHashMap<String, Boolean>()
+    enum class HomeView { TEAM, REQUESTS, ADMIN, INFO }
+
+    private data class HomeTab(val view: HomeView, val label: String, val actionId: String)
+
+    private data class ScopeTestInput(val scope: String, val tokenType: String, val verified: Boolean)
+
+    private val homeViews = ConcurrentHashMap<String, HomeView>()
+
+    private val scopeTests = ConcurrentHashMap<String, ScopeTestInput>()
+
+    private fun isScopeInfoScreenEnabled(): Boolean = "true".equals(SettingsManager["scope_info_screen"], ignoreCase = true)
 
     private fun statusEmoji(status: RequestStatus): String = when (status) {
         RequestStatus.PENDING_REVIEW -> ":hourglass_flowing_sand:"
@@ -254,7 +267,7 @@ object SlackWorkflowService {
         val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${record.appName}>" else record.appName
         val statusText = if (resolution == RequestDecision.WITHDRAWN && reason == RequestDecisionReason.THIRD_PARTY)
             ":question: *Resolved by someone*"
-            else "${statusEmoji(status)} *${statusLabel(status, resolution)}*"
+        else "${statusEmoji(status)} *${statusLabel(status, resolution)}*"
         val reasonText = formatReason(reason, resolutionMessage, resolvedBy)
 
         SlackManager.updateMessage(Config.SLACK_CHANNEL_REVIEW, reviewTs) {
@@ -573,7 +586,7 @@ object SlackWorkflowService {
         val user = "<@${request.user.id}>"
         val app = if (request.app.id.startsWith('A'))
             "<$MARKETPLACE_URL${request.app.id}|${request.app.name}>"
-            else "`${request.app.name}`"
+        else "`${request.app.name}`"
 
         val eventText = when (decision.status) {
             RequestStatus.APPROVED -> {
@@ -696,6 +709,10 @@ object SlackWorkflowService {
                     appendLine("    $B `restrict <scope> [type] [review]`: Restricts a scope")
                     appendLine("    $B `reset <scope> [type]`: Resets the config for a scope")
                     appendLine("    $B `allow-unverified <scope> [type]`: Allows a scope for unverified users")
+                    appendLine("$B `settings`: Shows all settings")
+                    appendLine("    $B `set <name> <value>`: Sets the value of a setting")
+                    appendLine("    $B `remove <name>`: Removes a setting")
+                    appendLine("    $B `get <name>`: Gets the value of a setting")
                     appendLine("$B `help`: Shows this help message")
                     appendLine()
                     appendLine("Args:")
@@ -782,119 +799,538 @@ object SlackWorkflowService {
         publishAppHome(userId)
     }
 
+    suspend fun setHomeView(userId: String, view: HomeView, updateHome: Boolean = true) {
+        if (view == HomeView.ADMIN && !SlackInteractionHandler.isAdmin(userId)) return
+        homeViews[userId] = view
+        if (updateHome) {
+            publishAppHome(userId)
+        }
+    }
+
+    private fun resolveHomeView(userId: String, isAdmin: Boolean, isTeam: Boolean): HomeView {
+        val stored = homeViews[userId]
+        val allowed = when (stored) {
+            HomeView.TEAM -> isTeam
+            HomeView.ADMIN -> isAdmin
+            HomeView.INFO -> isScopeInfoScreenEnabled()
+            HomeView.REQUESTS -> true
+            null -> false
+        }
+        if (stored != null && allowed) return stored
+        return if (isTeam) HomeView.TEAM else HomeView.REQUESTS
+    }
+
     suspend fun publishAppHome(userId: String) {
         val isAdmin = SlackInteractionHandler.isAdmin(userId)
-        val adminMode = isAdmin && homeAdminMode[userId] == true
-        if (adminMode) {
-            publishAdminHome(userId)
-            return
+        val isTeam = InstallRequestRepository.isTeamMemberAuthorized(userId)
+
+        when (resolveHomeView(userId, isAdmin, isTeam)) {
+            HomeView.TEAM -> publishTeamHome(userId, isAdmin, isTeam)
+            HomeView.REQUESTS -> publishRequestsHome(userId, isAdmin, isTeam)
+            HomeView.ADMIN -> publishAdminHome(userId, isAdmin, isTeam)
+            HomeView.INFO -> publishInfoHome(userId, isAdmin, isTeam)
         }
+    }
 
-        val isTeamMember = InstallRequestRepository.isTeamMemberAuthorized(userId)
-        if (isTeamMember) {
-            val pendingRequests = InstallRequestRepository.getPendingRequests(limit = 10)
-            val autoDenied = InstallRequestRepository.getAutoDeniedRequests(limit = 10)
-            val recentResolved = InstallRequestRepository.getRecentResolvedRequests(limit = 8)
+    private fun LayoutBlockDsl.homeNav(current: HomeView, isAdmin: Boolean, isTeam: Boolean) {
+        val tabs = listOfNotNull(
+            if (isTeam) HomeTab(HomeView.TEAM, "Review Queue", "home_team") else null,
+            HomeTab(HomeView.REQUESTS, "My Requests", "home_requests"),
+            if (isAdmin) HomeTab(HomeView.ADMIN, "Admin", "home_admin") else null,
+            if (isScopeInfoScreenEnabled()) HomeTab(HomeView.INFO, "Scope Policy", "home_info") else null,
+        )
+        // Nothing to switch between
+        if (tabs.size < 2) return
 
-            SlackManager.publishHomeView(userId) {
-                if (isAdmin) homeSwitch(false)
+        actions {
+            for (tab in tabs) {
+                button {
+                    text(tab.label, true)
+                    actionId(tab.actionId)
+                    value(tab.view.name.lowercase())
+                    if (tab.view == current) style("primary")
+                }
+            }
+        }
+    }
+
+    private suspend fun publishTeamHome(userId: String, isAdmin: Boolean, isTeam: Boolean) {
+        val pendingRequests = InstallRequestRepository.getPendingRequests(limit = 10)
+        val autoDenied = InstallRequestRepository.getAutoDeniedRequests(limit = 10)
+        val recentResolved = InstallRequestRepository.getRecentResolvedRequests(limit = 8)
+
+        SlackManager.publishHomeView(userId) {
+            homeNav(HomeView.TEAM, isAdmin, isTeam)
+            header {
+                text("App Approval Dashboard", true)
+            }
+            section {
+                markdownText(":wave: Welcome, <@$userId>. You can review and manage app installation requests here.")
+            }
+            divider()
+
+            header {
+                text("Pending Requests (${pendingRequests.size})", true)
+            }
+            if (pendingRequests.isEmpty()) {
+                section {
+                    markdownText(":tada: No pending installation requests to review!")
+                }
+            } else {
+                for (req in pendingRequests) reviewEntry(req)
+            }
+
+            if (autoDenied.isNotEmpty()) {
                 header {
-                    text("App Approval Dashboard", true)
+                    text("Automatically Denied (${autoDenied.size})", true)
                 }
                 section {
-                    markdownText(":wave: Welcome, <@$userId>. You have access to review and manage app installation requests.")
+                    markdownText("These requests were denied automatically and need no review. You can still override them.")
                 }
-                divider()
+                for (req in autoDenied) reviewEntry(req)
+            }
 
+            if (recentResolved.isNotEmpty()) {
                 header {
-                    text("Pending Requests (${pendingRequests.size})", true)
+                    text("Recent Decisions", true)
                 }
-                if (pendingRequests.isEmpty()) {
-                    section {
-                        markdownText(":tada: No pending installation requests to review!")
-                    }
-                } else {
-                    for (req in pendingRequests) reviewEntry(req)
-                }
+                for (req in recentResolved) reviewEntry(req, false)
+            }
+        }
+    }
 
-                if (autoDenied.isNotEmpty()) {
-                    header {
-                        text("Automatically Denied (${autoDenied.size})", true)
-                    }
-                    section {
-                        markdownText("These requests were denied automatically and need no review. You can still override them.")
-                    }
-                    for (req in autoDenied) reviewEntry(req)
-                }
+    private suspend fun publishRequestsHome(userId: String, isAdmin: Boolean, isTeam: Boolean) {
+        val userRequests = InstallRequestRepository.getUserRequests(userId, limit = 20)
+        val isVerified = VerificationManager.isVerified(userId)
 
-                if (recentResolved.isNotEmpty()) {
-                    header {
-                        text("Recent Decisions", true)
-                    }
-                    for (req in recentResolved) reviewEntry(req, false)
+        SlackManager.publishHomeView(userId) {
+            homeNav(HomeView.REQUESTS, isAdmin, isTeam)
+            header {
+                text("My App Installation Requests", true)
+            }
+            if (!isVerified) {
+                section {
+                    markdownText(":warning: *Your account is not verified.* <https://auth.hackclub.com|Verify here>")
                 }
             }
-        } else {
-            val userRequests = InstallRequestRepository.getUserRequests(userId, limit = 20)
-            val isVerified = VerificationManager.isVerified(userId)
+            divider()
 
-            SlackManager.publishHomeView(userId) {
-                if (isAdmin) homeSwitch(false)
-                header {
-                    text("My App Installation Requests", true)
+            if (userRequests.isEmpty()) {
+                section {
+                    markdownText("You have not requested any apps yet.")
                 }
-                if (!isVerified) {
+            } else {
+                for (req in userRequests) {
+                    val appUrl = req.appUrl
+                    val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${req.appName}>" else req.appName
+                    val statusText = "${statusEmoji(req.status)} *${statusLabel(req.status, req.resolution)}*"
+                    val reason = formatReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)
+
                     section {
-                        markdownText(":warning: *Your account is not verified.* <https://auth.hackclub.com|Verify here>")
+                        markdownText("*App:* $appLink (`${req.appId}`)\n*Status:* $statusText\n*Details:* $reason")
+                    }
+
+                    if (req.status == RequestStatus.PENDING_REVIEW || (req.status == RequestStatus.DENIED && req.resolution == null)) {
+                        actions {
+                            if (!isVerified) {
+                                button {
+                                    text("Check Verification", true)
+                                    actionId("user_check_verification")
+                                    value(req.requestId)
+                                    style("primary")
+                                }
+                            }
+                            if (req.status != RequestStatus.PENDING_REVIEW) {
+                                button {
+                                    text("Request Manual Review", true)
+                                    actionId("user_request_review")
+                                    value(req.requestId)
+                                }
+                            }
+                            button {
+                                text("Withdraw Request", true)
+                                actionId("user_withdraw_request")
+                                value(req.requestId)
+                                style("danger")
+                            }
+                        }
+                    }
+                    divider()
+                }
+            }
+        }
+    }
+
+    private suspend fun publishInfoHome(userId: String, isAdmin: Boolean, isTeam: Boolean) {
+        val isVerified = VerificationManager.isVerified(userId)
+        val rules = InstallRequestRepository.getScopeRules()
+            .filter { it.enabled }
+            .sortedWith(ScopeRulePrecedenceComparator)
+
+        val groups = listOf(
+            Triple(
+                RuleAction.ALLOW,
+                ":white_check_mark: Allowed",
+                "Apps that only request these scopes are approved automatically."
+            ),
+            Triple(
+                RuleAction.REVIEW,
+                ":hourglass_flowing_sand: Needs manual review",
+                "Apps requesting these scopes are sent to the approval team."
+            ),
+            Triple(
+                RuleAction.BLOCK,
+                ":no_entry_sign: Declined",
+                "Apps requesting these scopes are declined automatically. You can still ask for a manual review."
+            ),
+        )
+
+        SlackManager.publishHomeView(userId) {
+            homeNav(HomeView.INFO, isAdmin, isTeam)
+            header {
+                text("Scope Policy", true)
+            }
+            section {
+                markdownText(
+                    "Every installation request is checked against the rules below before a person looks at it.\n\n" +
+                            if (isVerified) "*Your account:* verified"
+                            else "*Your account:* not verified (<https://auth.hackclub.com|verify here>). " +
+                                    "Rules marked _unverified users_ or _everyone_ are the ones that apply to you."
+                )
+            }
+            context {
+                markdownText(
+                    "If several rules match a scope, the most specific one wins. " +
+                            "Scopes without a matching rule are approved for verified users; unverified users need a manual review."
+                )
+            }
+            val catchAll = rules.filter { it.pattern == "*" && it.scopeType == ScopeType.BOTH && it.userTarget == RuleUserTarget.ALL }.sortedByDescending { it.action }
+            if (catchAll.isNotEmpty()) {
+                val action = catchAll.first().action
+                section {
+                    markdownText(
+                        "There is a catch-all rule. That means if none of the other rules match, " + when (action) {
+                            RuleAction.ALLOW -> "it will be approved."
+                            RuleAction.REVIEW -> "it will need a manual review."
+                            RuleAction.BLOCK -> "it will be blocked."
+                        }
+                    )
+                }
+            }
+            divider()
+
+            for ((action, title, explanation) in groups) {
+                val groupRules = rules.filter { it.action == action }
+                header {
+                    text(title.removePrefix(":white_check_mark: ")
+                        .removePrefix(":hourglass_flowing_sand: ")
+                        .removePrefix(":no_entry_sign: "), true)
+                }
+                context {
+                    markdownText(explanation)
+                }
+                if (groupRules.isEmpty()) {
+                    section {
+                        markdownText("_No rules._")
+                    }
+                } else {
+                    val lines = groupRules.map { rule ->
+                        "$BULLET `${rule.pattern}`  ${targetLabel(rule.userTarget)}, ${typeLabel(rule.scopeType)}" +
+                                if (rule.pattern == "*" && rule.userTarget == RuleUserTarget.ALL && rule.scopeType == ScopeType.BOTH) " (this is the catch all rule)" else ""
+                    }
+                    for (chunk in chunkLines(lines)) {
+                        section {
+                            markdownText(chunk)
+                        }
                     }
                 }
                 divider()
+            }
+        }
+    }
 
-                if (userRequests.isEmpty()) {
-                    section {
-                        markdownText("You have not requested any apps yet.")
-                    }
-                } else {
-                    for (req in userRequests) {
-                        val appUrl = req.appUrl
-                        val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${req.appName}>" else req.appName
-                        val statusText = "${statusEmoji(req.status)} *${statusLabel(req.status, req.resolution)}*"
-                        val reason = formatReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)
+    private suspend fun publishAdminHome(userId: String, isAdmin: Boolean, isTeam: Boolean) {
+        val members = InstallRequestRepository.getTeamMembers()
+        val rules = InstallRequestRepository.getScopeRules()
+        val sortedRules = rules.sortedWith(ScopeRulePrecedenceComparator)
+        val test = scopeTests[userId]
 
-                        section {
-                            markdownText("*App:* $appLink (`${req.appId}`)\n*Status:* $statusText\n*Details:* $reason")
-                        }
+        val membersText =
+            if (members.isEmpty()) "_No team members yet._" else members.joinToString(", ") { "<@$it>" }
+        val enabledCount = rules.count { it.enabled }
 
-                        if (req.status == RequestStatus.PENDING_REVIEW || (req.status == RequestStatus.DENIED && req.resolution == null)) {
-                            actions {
-                                if (!isVerified) {
-                                    button {
-                                        text("Check Verification", true)
-                                        actionId("user_check_verification")
-                                        value(req.requestId)
-                                        style("primary")
-                                    }
-                                }
-                                if (req.status != RequestStatus.PENDING_REVIEW) {
-                                    button {
-                                        text("Request Manual Review", true)
-                                        actionId("user_request_review")
-                                        value(req.requestId)
-                                    }
-                                }
-                                button {
-                                    text("Withdraw Request", true)
-                                    actionId("user_withdraw_request")
-                                    value(req.requestId)
-                                    style("danger")
-                                }
-                            }
-                        }
-                        divider()
+        SlackManager.publishHomeView(userId) {
+            homeNav(HomeView.ADMIN, isAdmin, isTeam)
+            header {
+                text("Admin Dashboard", true)
+            }
+            section {
+                markdownText("*Team members (${members.size})*\n${membersText.take(2900)}")
+            }
+            divider()
+
+            header {
+                text("Scope Rules", true)
+            }
+            context {
+                markdownText(
+                    "$enabledCount of ${rules.size} rules enabled. Rules are listed from most to least specific; " +
+                            "when several rules match a scope, the first one wins."
+                )
+            }
+            actions {
+                button {
+                    text("Add Rule", true)
+                    actionId("admin_add_scope_rule")
+                    value("add")
+                    style("primary")
+                }
+                button {
+                    text(if (test == null) "Test a Scope" else "Test Another Scope", true)
+                    actionId("admin_test_scope")
+                    value("test")
+                }
+            }
+
+            if (test != null) {
+                scopeTestPanel(test, rules)
+            }
+
+            if (rules.isEmpty()) {
+                section {
+                    markdownText("*No scope rules configured yet.* Use *Add Rule* to create the first one.")
+                }
+            } else {
+                for ((index, rule) in sortedRules.take(MAX_ADMIN_RULES_SHOWN).withIndex()) {
+                    if (index != 0 || test == null) divider()
+                    adminRuleEntry(rule)
+                }
+                if (sortedRules.size > MAX_ADMIN_RULES_SHOWN) {
+                    context {
+                        markdownText("Showing the first $MAX_ADMIN_RULES_SHOWN of ${sortedRules.size} rules.")
                     }
                 }
             }
         }
+    }
+
+    private fun LayoutBlockDsl.adminRuleEntry(rule: ScopeRule) {
+        val title = "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
+        val details = "${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)} $BULLET #${rule.id}"
+        val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
+
+        section {
+            markdownText("$title\n$details$description")
+            accessory {
+                overflowMenu {
+                    actionId("admin_rule_menu")
+                    options {
+                        option {
+                            plainText("Edit", true)
+                            value("edit:${rule.id}")
+                        }
+                        option {
+                            plainText(if (rule.enabled) "Disable" else "Enable", true)
+                            value("toggle:${rule.id}")
+                        }
+                        option {
+                            plainText("Delete", true)
+                            value("delete:${rule.id}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private enum class RuleState { APPLIED, OVERRIDDEN, INACTIVE }
+
+    private data class RuleEvaluation(val rule: ScopeRule, val state: RuleState, val note: String)
+
+    private fun evaluateScope(
+        rules: List<ScopeRule>,
+        scope: String,
+        tokenType: String,
+        verified: Boolean
+    ): Pair<ScopeRule?, List<RuleEvaluation>> {
+        val sorted = rules.sortedWith(ScopeRulePrecedenceComparator)
+        val matching = sorted.filter { it.matches(scope, tokenType, verified) }
+        val winner = matching.firstOrNull()
+
+        val evaluations = sorted.map { rule ->
+            when {
+                rule === winner -> RuleEvaluation(rule, RuleState.APPLIED, "highest precedence of all matching rules")
+                matching.any { it === rule } ->
+                    RuleEvaluation(rule, RuleState.OVERRIDDEN, "matches, but rule #${winner?.id} takes precedence")
+
+                else -> RuleEvaluation(rule, RuleState.INACTIVE, inactiveReason(rule, scope, tokenType, verified))
+            }
+        }
+        return winner to evaluations
+    }
+
+    private fun inactiveReason(rule: ScopeRule, scope: String, tokenType: String, verified: Boolean): String = when {
+        !rule.enabled -> "rule is disabled"
+        rule.scopeType == ScopeType.USER && !tokenType.equals("user", ignoreCase = true) -> "only applies to user scopes"
+        rule.scopeType == ScopeType.BOT && !tokenType.equals("bot", ignoreCase = true) -> "only applies to bot scopes"
+        rule.userTarget == RuleUserTarget.VERIFIED && !verified -> "only applies to verified users"
+        rule.userTarget == RuleUserTarget.UNVERIFIED && verified -> "only applies to unverified users"
+        !rule.matcher.match(scope.trim()) -> "pattern does not match"
+        else -> "does not apply"
+    }
+
+    private fun ruleSummary(rule: ScopeRule): String =
+        "#${rule.id} `${rule.pattern}` $BULLET ${actionLabel(rule.action)} $BULLET ${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)}"
+
+    private fun LayoutBlockDsl.scopeTestPanel(test: ScopeTestInput, rules: List<ScopeRule>) {
+        val (winner, evaluations) = evaluateScope(rules, test.scope, test.tokenType, test.verified)
+        val personText = if (test.verified) "a *verified* user" else "an *unverified* user"
+        val tokenText = if (test.tokenType.equals("user", true)) "user" else "bot"
+
+        val outcome = when {
+            winner != null -> when (winner.action) {
+                RuleAction.ALLOW -> ":white_check_mark: *Allowed.* The scope is approved automatically."
+                RuleAction.REVIEW -> ":hourglass_flowing_sand: *Manual review.* The request is sent to the approval team."
+                RuleAction.BLOCK -> ":no_entry_sign: *Blocked.* The request is declined automatically."
+            }
+
+            test.verified ->
+                ":white_check_mark: *Allowed (no rule).* Verified users may use scopes that no rule matches."
+
+            else ->
+                ":no_entry_sign: *Declined (no rule).* No rule explicitly allows this scope for unverified users."
+        }
+
+        divider()
+        section {
+            markdownText("*Scope test*\n`${test.scope}` as $tokenText scope, requested by $personText.")
+        }
+        section {
+            markdownText(outcome)
+        }
+
+        val applied = evaluations.firstOrNull { it.state == RuleState.APPLIED }
+        if (applied != null) {
+            section {
+                markdownText("*Applied rule*\n${ruleSummary(applied.rule)}")
+            }
+        }
+
+        val overridden = evaluations.filter { it.state == RuleState.OVERRIDDEN }
+        if (overridden.isNotEmpty()) {
+            context {
+                markdownText("*Also matching, but overridden*")
+            }
+            for (chunk in chunkLines(overridden.map { "${ruleSummary(it.rule)} (${it.note})" })) {
+                context {
+                    markdownText(chunk)
+                }
+            }
+        }
+
+        val inactive = evaluations.filter { it.state == RuleState.INACTIVE }
+        if (inactive.isNotEmpty()) {
+            context {
+                markdownText("*Not applicable (${inactive.size})*")
+            }
+            val lines = inactive.take(MAX_TEST_INACTIVE_SHOWN).map { "${ruleSummary(it.rule)} (${it.note})" }
+            for (chunk in chunkLines(lines)) {
+                context {
+                    markdownText(chunk)
+                }
+            }
+            if (inactive.size > MAX_TEST_INACTIVE_SHOWN) {
+                context {
+                    markdownText("… and ${inactive.size - MAX_TEST_INACTIVE_SHOWN} more.")
+                }
+            }
+        }
+
+        context {
+            markdownText(
+                "This test only evaluates scope rules. Restricted apps, org-wide installs, command conflicts " +
+                        "and previously approved or denied requests are checked separately."
+            )
+        }
+        actions {
+            button {
+                text("Clear Test", true)
+                actionId("admin_test_clear")
+                value("clear")
+            }
+        }
+        divider()
+    }
+
+    suspend fun openScopeTestModal(userId: String, triggerId: String) {
+        if (!SlackInteractionHandler.isAdmin(userId)) {
+            openUnauthorizedMessage(triggerId)
+            return
+        }
+        val previous = scopeTests[userId]
+        val modal = buildScopeTestModal(
+            initialScope = previous?.scope,
+            initialTokenType = previous?.tokenType ?: "bot",
+            initialVerified = previous?.verified ?: true
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    suspend fun submitScopeTest(userId: String, scope: String, tokenType: String, userKind: String) {
+        if (!SlackInteractionHandler.isAdmin(userId)) return
+        val trimmed = scope.trim()
+        if (trimmed.isEmpty()) return
+        scopeTests[userId] = ScopeTestInput(
+            scope = trimmed,
+            tokenType = if (tokenType.equals("USER", ignoreCase = true)) "user" else "bot",
+            verified = !userKind.equals("UNVERIFIED", ignoreCase = true)
+        )
+        homeViews[userId] = HomeView.ADMIN
+        publishAppHome(userId)
+    }
+
+    fun clearScopeTest(userId: String) {
+        scopeTests.remove(userId)
+    }
+
+    private fun actionLabel(action: RuleAction): String = when (action) {
+        RuleAction.ALLOW -> "Allow"
+        RuleAction.REVIEW -> "Review"
+        RuleAction.BLOCK -> "Block"
+    }
+
+    private fun actionEmoji(action: RuleAction): String = when (action) {
+        RuleAction.ALLOW -> ":white_check_mark:"
+        RuleAction.REVIEW -> ":hourglass_flowing_sand:"
+        RuleAction.BLOCK -> ":no_entry_sign:"
+    }
+
+    private fun targetLabel(target: RuleUserTarget): String = when (target) {
+        RuleUserTarget.ALL -> "everyone"
+        RuleUserTarget.VERIFIED -> "verified users"
+        RuleUserTarget.UNVERIFIED -> "unverified users"
+    }
+
+    private fun typeLabel(type: ScopeType): String = when (type) {
+        ScopeType.BOTH -> "bot & user scopes"
+        ScopeType.BOT -> "bot scopes"
+        ScopeType.USER -> "user scopes"
+    }
+
+    private fun chunkLines(lines: List<String>, maxChars: Int = 2800): List<String> {
+        val chunks = mutableListOf<String>()
+        val current = StringBuilder()
+        for (line in lines) {
+            val safeLine = line.take(maxChars)
+            if (current.isNotEmpty() && current.length + safeLine.length + 1 > maxChars) {
+                chunks += current.toString()
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append('\n')
+            current.append(safeLine)
+        }
+        if (current.isNotEmpty()) chunks += current.toString()
+        return chunks
     }
 
     fun buildInfoModal(title: String, message: String): JsonObject {
@@ -1037,10 +1473,189 @@ object SlackWorkflowService {
         return view
     }
 
-    private fun buildStyle(builder: RichTextSectionElement.TextStyle.TextStyleBuilder.() -> Unit): RichTextSectionElement.TextStyle? {
-        val style = styleBuilder()
-        style.builder()
-        return style.build()
+    private fun plainText(text: String): JsonObject = JsonObject().apply {
+        addProperty("type", "plain_text")
+        addProperty("text", text)
+        addProperty("emoji", true)
+    }
+
+    private fun optionObject(label: String, value: String): JsonObject = JsonObject().apply {
+        add("text", plainText(label))
+        addProperty("value", value)
+    }
+
+    private fun textInputElement(actionId: String, placeholder: String, initial: String?): JsonObject =
+        JsonObject().apply {
+            addProperty("type", "plain_text_input")
+            addProperty("action_id", actionId)
+            add("placeholder", plainText(placeholder))
+            if (!initial.isNullOrBlank()) addProperty("initial_value", initial)
+        }
+
+    private fun selectElement(actionId: String, options: List<Pair<String, String>>, selected: String): JsonObject =
+        JsonObject().apply {
+            addProperty("type", "static_select")
+            addProperty("action_id", actionId)
+            val array = JsonArray()
+            for ((label, value) in options) array.add(optionObject(label, value))
+            add("options", array)
+            val initial = options.firstOrNull { it.second == selected } ?: options.first()
+            add("initial_option", optionObject(initial.first, initial.second))
+        }
+
+    private fun inputBlock(
+        blockId: String,
+        label: String,
+        element: JsonObject,
+        optional: Boolean = false,
+        hint: String? = null
+    ): JsonObject = JsonObject().apply {
+        addProperty("type", "input")
+        addProperty("block_id", blockId)
+        if (optional) addProperty("optional", true)
+        add("label", plainText(label))
+        if (hint != null) add("hint", plainText(hint))
+        add("element", element)
+    }
+
+    private fun contextBlock(text: String): JsonObject = JsonObject().apply {
+        addProperty("type", "context")
+        val elements = JsonArray()
+        elements.add(JsonObject().apply {
+            addProperty("type", "mrkdwn")
+            addProperty("text", text)
+        })
+        add("elements", elements)
+    }
+
+    private fun modalBase(
+        title: String,
+        callbackId: String,
+        metadata: String,
+        submit: String,
+        blocks: List<JsonObject>
+    ): JsonObject = JsonObject().apply {
+        addProperty("type", "modal")
+        addProperty("callback_id", callbackId)
+        addProperty("private_metadata", metadata)
+        add("title", plainText(title.take(24)))
+        add("submit", plainText(submit.take(24)))
+        add("close", plainText("Cancel"))
+        val array = JsonArray()
+        blocks.forEach { array.add(it) }
+        add("blocks", array)
+    }
+
+    private val actionOptions = listOf(
+        "Allow: approve automatically" to RuleAction.ALLOW.name,
+        "Review: require manual review" to RuleAction.REVIEW.name,
+        "Block: decline automatically" to RuleAction.BLOCK.name,
+    )
+
+    private val targetOptions = listOf(
+        "Everyone" to RuleUserTarget.ALL.name,
+        "Verified users only" to RuleUserTarget.VERIFIED.name,
+        "Unverified users only" to RuleUserTarget.UNVERIFIED.name,
+    )
+
+    private val scopeTypeOptions = listOf(
+        "Bot and user scopes" to ScopeType.BOTH.name,
+        "Bot scopes only" to ScopeType.BOT.name,
+        "User scopes only" to ScopeType.USER.name,
+    )
+
+    fun buildScopeRuleModal(
+        title: String,
+        callbackId: String,
+        rule: ScopeRule? = null
+    ): JsonObject {
+        val blocks = listOf(
+            inputBlock(
+                blockId = "pattern_block",
+                label = "Scope pattern",
+                element = textInputElement(
+                    actionId = "pattern_input",
+                    placeholder = "e.g. chat:write, admin:*, *, /^users:.*/",
+                    initial = rule?.pattern
+                ),
+                hint = "Exact scope name, a * wildcard, or a regular expression wrapped in slashes."
+            ),
+            inputBlock(
+                blockId = "action_block",
+                label = "What should happen?",
+                element = selectElement("action_input", actionOptions, (rule?.action ?: RuleAction.ALLOW).name)
+            ),
+            inputBlock(
+                blockId = "target_block",
+                label = "Applies to",
+                element = selectElement("target_input", targetOptions, (rule?.userTarget ?: RuleUserTarget.ALL).name)
+            ),
+            inputBlock(
+                blockId = "scope_type_block",
+                label = "Scope type",
+                element = selectElement("scope_type_input", scopeTypeOptions, (rule?.scopeType ?: ScopeType.BOTH).name)
+            ),
+            inputBlock(
+                blockId = "description_block",
+                label = "Note (optional)",
+                element = textInputElement(
+                    actionId = "description_input",
+                    placeholder = "e.g. Security policy for admin scopes",
+                    initial = rule?.description
+                ),
+                optional = true
+            ),
+            contextBlock("If several rules match a scope, the most specific one wins. Use *Test a Scope* on the admin page to check the outcome.")
+        )
+
+        return modalBase(
+            title = title,
+            callbackId = callbackId,
+            metadata = rule?.id?.toString() ?: "",
+            submit = if (rule == null) "Create Rule" else "Save Changes",
+            blocks = blocks
+        )
+    }
+
+    fun buildScopeTestModal(
+        initialScope: String? = null,
+        initialTokenType: String = "bot",
+        initialVerified: Boolean = true
+    ): JsonObject {
+        val blocks = listOf(
+            inputBlock(
+                blockId = "test_scope_block",
+                label = "Scope",
+                element = textInputElement("test_scope_input", "e.g. chat:write", initialScope)
+            ),
+            inputBlock(
+                blockId = "test_type_block",
+                label = "Token type",
+                element = selectElement(
+                    "test_type_input",
+                    listOf("Bot scope" to "BOT", "User scope" to "USER"),
+                    if (initialTokenType.equals("user", true)) "USER" else "BOT"
+                )
+            ),
+            inputBlock(
+                blockId = "test_user_block",
+                label = "Requested by",
+                element = selectElement(
+                    "test_user_input",
+                    listOf("Verified user" to "VERIFIED", "Unverified user" to "UNVERIFIED"),
+                    if (initialVerified) "VERIFIED" else "UNVERIFIED"
+                )
+            ),
+            contextBlock("Shows which rule decides the outcome and why every other rule does not apply.")
+        )
+
+        return modalBase(
+            title = "Test a Scope",
+            callbackId = "modal_scope_test_submit",
+            metadata = "",
+            submit = "Run Test",
+            blocks = blocks
+        )
     }
 
     private fun ActionsBlockBuilder.reviewButtons(
@@ -1161,323 +1776,5 @@ object SlackWorkflowService {
             }
         }
         divider()
-    }
-
-    private fun LayoutBlockDsl.homeSwitch(adminMode: Boolean) {
-        actions {
-            button {
-                text("Team Home", true)
-                actionId("home_team")
-                value("team")
-                if (!adminMode) style("primary")
-            }
-            button {
-                text("Admin Home", true)
-                actionId("home_admin")
-                value("admin")
-                if (adminMode) style("primary")
-            }
-        }
-    }
-
-    suspend fun setHomeMode(userId: String, admin: Boolean, updateHome: Boolean = true) {
-        if (admin && !SlackInteractionHandler.isAdmin(userId)) return
-        homeAdminMode[userId] = admin
-        if (updateHome) {
-            publishAppHome(userId)
-        }
-    }
-
-    private suspend fun publishAdminHome(userId: String) {
-        val members = InstallRequestRepository.getTeamMembers()
-        val rules = InstallRequestRepository.getScopeRules()
-
-        val membersText =
-            if (members.isEmpty()) "No team members yet." else members.joinToString("\n") { "$BULLET <@$it>" }
-
-        SlackManager.publishHomeView(userId) {
-            homeSwitch(true)
-            header {
-                text("Admin Dashboard", true)
-            }
-            divider()
-            header {
-                text("Team Members (${members.size})", true)
-            }
-            section {
-                markdownText(membersText.take(3000))
-            }
-            divider()
-            header {
-                text("Scope Rules (${rules.size})", true)
-            }
-            actions {
-                button {
-                    text("➕ Add Scope Rule", true)
-                    actionId("admin_add_scope_rule")
-                    value("add")
-                    style("primary")
-                }
-            }
-            if (rules.isEmpty()) {
-                section {
-                    markdownText(":information_source: *No scope rules configured yet.* Click *Add Scope Rule* above to create your first rule.")
-                }
-            } else {
-                for (rule in rules) {
-                    val statusBadge = if (rule.enabled) ":white_check_mark: Enabled" else ":double_vertical_bar: Disabled"
-                    val actionBadge = when (rule.action) {
-                        RuleAction.ALLOW -> ":white_check_mark: *ALLOW*"
-                        RuleAction.REVIEW -> ":hourglass_flowing_sand: *REVIEW*"
-                        RuleAction.BLOCK -> ":no_entry_sign: *BLOCK*"
-                    }
-                    val targetLabel = when (rule.userTarget) {
-                        RuleUserTarget.ALL -> "Everyone"
-                        RuleUserTarget.VERIFIED -> "Verified Users"
-                        RuleUserTarget.UNVERIFIED -> "Unverified Users"
-                    }
-                    val descText = if (!rule.description.isNullOrBlank()) "\n>_${rule.description}_" else ""
-
-                    section {
-                        markdownText(
-                            "*Rule #${rule.id}:* `${rule.pattern}` [${rule.scopeType}]\n" +
-                                    "• *Action:* $actionBadge for *$targetLabel*\n" +
-                                    "• *Status:* $statusBadge$descText"
-                        )
-                    }
-                    actions {
-                        button {
-                            text("Edit", true)
-                            actionId("admin_edit_scope_rule")
-                            value(rule.id.toString())
-                        }
-                        if (rule.enabled) {
-                            button {
-                                text("Disable", true)
-                                actionId("admin_toggle_scope_rule")
-                                value(rule.id.toString())
-                            }
-                        } else {
-                            button {
-                                text("Enable", true)
-                                actionId("admin_toggle_scope_rule")
-                                value(rule.id.toString())
-                                style("primary")
-                            }
-                        }
-                        button {
-                            text("Delete", true)
-                            actionId("admin_delete_scope_rule")
-                            value(rule.id.toString())
-                            style("danger")
-                        }
-                    }
-                    divider()
-                }
-            }
-        }
-    }
-
-    fun buildScopeRuleModal(
-        title: String,
-        callbackId: String,
-        rule: ScopeRule? = null
-    ): JsonObject {
-        val view = JsonObject()
-        view.addProperty("type", "modal")
-        view.addProperty("callback_id", callbackId)
-        view.addProperty("private_metadata", rule?.id?.toString() ?: "")
-
-        val titleObj = JsonObject()
-        titleObj.addProperty("type", "plain_text")
-        titleObj.addProperty("text", title.take(24))
-        titleObj.addProperty("emoji", true)
-        view.add("title", titleObj)
-
-        val submitObj = JsonObject()
-        submitObj.addProperty("type", "plain_text")
-        submitObj.addProperty("text", if (rule == null) "Create Rule" else "Save Changes")
-        submitObj.addProperty("emoji", true)
-        view.add("submit", submitObj)
-
-        val closeObj = JsonObject()
-        closeObj.addProperty("type", "plain_text")
-        closeObj.addProperty("text", "Cancel")
-        closeObj.addProperty("emoji", true)
-        view.add("close", closeObj)
-
-        val blocks = JsonArray()
-
-        // 1. Pattern input block
-        val patternBlock = JsonObject()
-        patternBlock.addProperty("type", "input")
-        patternBlock.addProperty("block_id", "pattern_block")
-        val patternLabel = JsonObject()
-        patternLabel.addProperty("type", "plain_text")
-        patternLabel.addProperty("text", "Scope Pattern")
-        patternBlock.add("label", patternLabel)
-        val patternElement = JsonObject()
-        patternElement.addProperty("type", "plain_text_input")
-        patternElement.addProperty("action_id", "pattern_input")
-        val patternPlaceholder = JsonObject()
-        patternPlaceholder.addProperty("type", "plain_text")
-        patternPlaceholder.addProperty("text", "e.g. chat:write, admin:*, *, /^users:.*/")
-        patternElement.add("placeholder", patternPlaceholder)
-        if (rule != null) {
-            patternElement.addProperty("initial_value", rule.pattern)
-        }
-        patternBlock.add("element", patternElement)
-        blocks.add(patternBlock)
-
-        // 2. Action block (static_select)
-        val actionBlock = JsonObject()
-        actionBlock.addProperty("type", "input")
-        actionBlock.addProperty("block_id", "action_block")
-        val actionLabel = JsonObject()
-        actionLabel.addProperty("type", "plain_text")
-        actionLabel.addProperty("text", "Action")
-        actionBlock.add("label", actionLabel)
-        val actionElement = JsonObject()
-        actionElement.addProperty("type", "static_select")
-        actionElement.addProperty("action_id", "action_input")
-        val actionOptions = JsonArray()
-        for (action in RuleAction.entries) {
-            val opt = JsonObject()
-            val text = JsonObject()
-            text.addProperty("type", "plain_text")
-            text.addProperty("text", when (action) {
-                RuleAction.ALLOW -> "ALLOW (Automatically approve)"
-                RuleAction.REVIEW -> "REVIEW (Require manual review)"
-                RuleAction.BLOCK -> "BLOCK (Automatically decline)"
-            })
-            opt.add("text", text)
-            opt.addProperty("value", action.name)
-            actionOptions.add(opt)
-        }
-        actionElement.add("options", actionOptions)
-        val selectedAction = rule?.action ?: RuleAction.ALLOW
-        val initialActionOpt = JsonObject().apply {
-            val t = JsonObject()
-            t.addProperty("type", "plain_text")
-            t.addProperty("text", when (selectedAction) {
-                RuleAction.ALLOW -> "ALLOW (Automatically approve)"
-                RuleAction.REVIEW -> "REVIEW (Require manual review)"
-                RuleAction.BLOCK -> "BLOCK (Automatically decline)"
-            })
-            add("text", t)
-            addProperty("value", selectedAction.name)
-        }
-        actionElement.add("initial_option", initialActionOpt)
-        actionBlock.add("element", actionElement)
-        blocks.add(actionBlock)
-
-        // 3. User Target block (static_select)
-        val targetBlock = JsonObject()
-        targetBlock.addProperty("type", "input")
-        targetBlock.addProperty("block_id", "target_block")
-        val targetLabel = JsonObject()
-        targetLabel.addProperty("type", "plain_text")
-        targetLabel.addProperty("text", "User Verification Status")
-        targetBlock.add("label", targetLabel)
-        val targetElement = JsonObject()
-        targetElement.addProperty("type", "static_select")
-        targetElement.addProperty("action_id", "target_input")
-        val targetOptions = JsonArray()
-        for (target in RuleUserTarget.entries) {
-            val opt = JsonObject()
-            val text = JsonObject()
-            text.addProperty("type", "plain_text")
-            text.addProperty("text", when (target) {
-                RuleUserTarget.ALL -> "Everyone (All Users)"
-                RuleUserTarget.VERIFIED -> "Verified Users Only"
-                RuleUserTarget.UNVERIFIED -> "Unverified Users Only"
-            })
-            opt.add("text", text)
-            opt.addProperty("value", target.name)
-            targetOptions.add(opt)
-        }
-        targetElement.add("options", targetOptions)
-        val selectedTarget = rule?.userTarget ?: RuleUserTarget.ALL
-        val initialTargetOpt = JsonObject().apply {
-            val t = JsonObject()
-            t.addProperty("type", "plain_text")
-            t.addProperty("text", when (selectedTarget) {
-                RuleUserTarget.ALL -> "Everyone (All Users)"
-                RuleUserTarget.VERIFIED -> "Verified Users Only"
-                RuleUserTarget.UNVERIFIED -> "Unverified Users Only"
-            })
-            add("text", t)
-            addProperty("value", selectedTarget.name)
-        }
-        targetElement.add("initial_option", initialTargetOpt)
-        targetBlock.add("element", targetElement)
-        blocks.add(targetBlock)
-
-        // 4. Scope Type block (static_select)
-        val scopeTypeBlock = JsonObject()
-        scopeTypeBlock.addProperty("type", "input")
-        scopeTypeBlock.addProperty("block_id", "scope_type_block")
-        val scopeTypeLabel = JsonObject()
-        scopeTypeLabel.addProperty("type", "plain_text")
-        scopeTypeLabel.addProperty("text", "Scope Type")
-        scopeTypeBlock.add("label", scopeTypeLabel)
-        val scopeTypeElement = JsonObject()
-        scopeTypeElement.addProperty("type", "static_select")
-        scopeTypeElement.addProperty("action_id", "scope_type_input")
-        val scopeTypeOptions = JsonArray()
-        for (type in ScopeType.entries) {
-            val opt = JsonObject()
-            val text = JsonObject()
-            text.addProperty("type", "plain_text")
-            text.addProperty("text", when (type) {
-                ScopeType.BOTH -> "Both (User & Bot)"
-                ScopeType.BOT -> "Bot Scopes Only"
-                ScopeType.USER -> "User Scopes Only"
-            })
-            opt.add("text", text)
-            opt.addProperty("value", type.name)
-            scopeTypeOptions.add(opt)
-        }
-        scopeTypeElement.add("options", scopeTypeOptions)
-        val selectedScopeType = rule?.scopeType ?: ScopeType.BOTH
-        val initialScopeTypeOpt = JsonObject().apply {
-            val t = JsonObject()
-            t.addProperty("type", "plain_text")
-            t.addProperty("text", when (selectedScopeType) {
-                ScopeType.BOTH -> "Both (User & Bot)"
-                ScopeType.BOT -> "Bot Scopes Only"
-                ScopeType.USER -> "User Scopes Only"
-            })
-            add("text", t)
-            addProperty("value", selectedScopeType.name)
-        }
-        scopeTypeElement.add("initial_option", initialScopeTypeOpt)
-        scopeTypeBlock.add("element", scopeTypeElement)
-        blocks.add(scopeTypeBlock)
-
-        // 5. Description / Notes block (optional)
-        val descBlock = JsonObject()
-        descBlock.addProperty("type", "input")
-        descBlock.addProperty("block_id", "description_block")
-        descBlock.addProperty("optional", true)
-        val descLabel = JsonObject()
-        descLabel.addProperty("type", "plain_text")
-        descLabel.addProperty("text", "Description / Notes (Optional)")
-        descBlock.add("label", descLabel)
-        val descElement = JsonObject()
-        descElement.addProperty("type", "plain_text_input")
-        descElement.addProperty("action_id", "description_input")
-        val descPlaceholder = JsonObject()
-        descPlaceholder.addProperty("type", "plain_text")
-        descPlaceholder.addProperty("text", "e.g. Security policy for admin scopes")
-        descElement.add("placeholder", descPlaceholder)
-        if (!rule?.description.isNullOrBlank()) {
-            descElement.addProperty("initial_value", rule.description)
-        }
-        descBlock.add("element", descElement)
-        blocks.add(descBlock)
-
-        view.add("blocks", blocks)
-        return view
     }
 }

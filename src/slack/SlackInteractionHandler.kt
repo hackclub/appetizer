@@ -89,12 +89,25 @@ object SlackInteractionHandler {
                 "user_check_verification" -> handleUserCheckVerification(userId, value)
                 "user_request_review" -> handleUserRequestReview(userId, value)
                 "user_withdraw_request" -> handleUserWithdrawRequest(userId, value)
-                "home_team" -> SlackWorkflowService.setHomeMode(userId, false, updateHome = false)
-                "home_admin" -> SlackWorkflowService.setHomeMode(userId, true, updateHome = false)
+                "home_team" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.TEAM, updateHome = false)
+                "home_admin" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.ADMIN, updateHome = false)
                 "admin_add_scope_rule" -> handleAdminAddScopeRule(userId, triggerId)
                 "admin_edit_scope_rule" -> handleAdminEditScopeRule(userId, value, triggerId)
                 "admin_toggle_scope_rule" -> handleAdminToggleScopeRule(userId, value)
                 "admin_delete_scope_rule" -> handleAdminDeleteScopeRule(userId, value, triggerId)
+                "home_requests" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.REQUESTS, updateHome = false)
+                "home_info" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.INFO, updateHome = false)
+                "admin_test_scope" -> SlackWorkflowService.openScopeTestModal(userId, triggerId)
+                "admin_test_clear" -> SlackWorkflowService.clearScopeTest(userId)
+                "admin_rule_menu" -> {
+                    val selected = action["selected_option"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: continue
+                    val (op, id) = selected.split(":", limit = 2)
+                    when (op) {
+                        "edit" -> handleAdminEditScopeRule(userId, id, triggerId)
+                        "toggle" -> handleAdminToggleScopeRule(userId, id)
+                        "delete" -> handleAdminDeleteScopeRule(userId, id, triggerId)
+                    }
+                }
             }
         }
 
@@ -352,6 +365,12 @@ object SlackInteractionHandler {
             }
             "modal_scope_rule_submit" -> executeScopeRuleSubmit(userId, view, privateMetadata, triggerId)
             "modal_delete_scope_rule_submit" -> executeDeleteScopeRuleSubmit(userId, privateMetadata, triggerId)
+            "modal_scope_test_submit" -> {
+                val scope = extractInputValue(values, "test_scope_block", "test_scope_input") ?: return
+                val type = extractSelectedOption(values, "test_type_block", "test_type_input") ?: "BOT"
+                val kind = extractSelectedOption(values, "test_user_block", "test_user_input") ?: "VERIFIED"
+                SlackWorkflowService.submitScopeTest(userId, scope, type, kind)
+            }
 
             else -> logger.warn("Received unknown callback id $callbackId from user $userId")
         }

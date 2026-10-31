@@ -27,6 +27,7 @@ object CommandManager {
                 null, "help" -> SlackWorkflowService.sendHelpMessage(responseUrl)
                 "team" -> team(responseUrl, rest)
                 "scopes" -> scopes(responseUrl, rest)
+                "settings" -> settings(responseUrl, rest)
                 else -> SlackWorkflowService.sendUnknownArgMessage(responseUrl)
             }
         } catch (e: CancellationException) {
@@ -34,6 +35,40 @@ object CommandManager {
         } catch (e: Exception) {
             logger.error("Error while executing command $args", e)
             reply(responseUrl, ":x: An internal error occurred while executing the command.")
+        }
+    }
+
+    private suspend fun settings(responseUrl: Url, args: List<String>) {
+        when (val subcommand = args.firstOrNull()?.lowercase()) {
+            null, "list" -> {
+                val entries = SettingsManager.entries
+                if (entries.isEmpty()) return reply(responseUrl, "*Settings:*\nNo settings found.")
+                val settings = entries.joinToString("\n") { "${it.first} = ${it.second}" }
+                reply(responseUrl, "*Settings:*\n$settings")
+            }
+            "get" -> {
+                val name = args.getOrNull(1) ?: return reply(responseUrl, "Please provide a setting name.")
+                if (name.length > SettingsManager.MAX_SETTINGS_NAME_LENGTH) return reply(responseUrl, "Setting name cannot be longer than ${SettingsManager.MAX_SETTINGS_NAME_LENGTH} characters.")
+                val value = SettingsManager[name] ?: return reply(responseUrl, "Setting '$name' does not exist.")
+                reply(responseUrl, "*Setting '$name':*\n$value")
+            }
+            "set", "add" -> {
+                val name = args.getOrNull(1) ?: return reply(responseUrl, "Please provide a setting name.")
+                if (name.length > SettingsManager.MAX_SETTINGS_NAME_LENGTH) return reply(responseUrl, "Setting name cannot be longer than ${SettingsManager.MAX_SETTINGS_NAME_LENGTH} characters.")
+                val value = args.getOrNull(2) ?: return reply(responseUrl, "Please provide a setting value.")
+                if (value.length > SettingsManager.MAX_SETTINGS_VALUE_LENGTH) return reply(responseUrl, "Setting value cannot be longer than ${SettingsManager.MAX_SETTINGS_VALUE_LENGTH} characters.")
+                val existed = name in SettingsManager
+                SettingsManager[name] = value
+                reply(responseUrl, ":white_check_mark: Setting '$name' ${if (existed) "updated" else "created"}.")
+            }
+            "delete", "remove" -> {
+                val name = args.getOrNull(1) ?: return reply(responseUrl, "Please provide a setting name.")
+                if (name.length > SettingsManager.MAX_SETTINGS_NAME_LENGTH) return reply(responseUrl, "Setting name cannot be longer than ${SettingsManager.MAX_SETTINGS_NAME_LENGTH} characters.")
+                if (name !in SettingsManager) return reply(responseUrl, "Setting '$name' does not exist.")
+                SettingsManager[name] = null
+                reply(responseUrl, ":white_check_mark: Setting '$name' deleted.")
+            }
+            else -> reply(responseUrl, "Unknown arg: $subcommand")
         }
     }
 
