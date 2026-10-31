@@ -11,4 +11,5 @@
     <logger name="reactor.netty" level="INFO"/>
     <logger name="io.r2dbc" level="INFO"/>
     <logger name="io.netty" level="INFO"/>
+    <logger name="Exposed" level="INFO"/>
 </configuration>
