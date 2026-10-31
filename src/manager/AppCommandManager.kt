@@ -26,7 +26,7 @@ import org.jetbrains.exposed.v1.r2dbc.select
 import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.update
 import org.slf4j.LoggerFactory
-import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 object AppCommandManager {
     private val logger = LoggerFactory.getLogger(AppCommandManager::class.java)
@@ -90,11 +90,13 @@ object AppCommandManager {
             } catch (e: Exception) {
                 logger.error("Failed to fetch commands", e)
             }
-            delay(1.hours)
+            delay(30.minutes)
         }
     }
 
     private suspend fun syncCommands(commands: List<ResponseCommand>) {
+        var ignoredCommands = 0
+
         val normalizedCommands = commands.mapNotNull { command ->
             when (command.type) {
                 "app" if command.app == null -> {
@@ -107,27 +109,35 @@ object AppCommandManager {
                     null
                 }
 
-                !in setOf("app", "core") -> {
-                    logger.error("Unknown command type: ${command.type}")
-                    null
-                }
-
                 null -> {
                     // this is new, type can be none existing in the response
                     if (command.app == null && command.name_normalized == null && command.canonical_name == null) {
                         // i think this happens when an app is deleted, but i dont know, because it is new
+                        ignoredCommands++
                         return@mapNotNull null
                     } else {
                         logger.warn("Command with unknown type but with other properties: $command")
+                        ignoredCommands++
                         return@mapNotNull null
                     }
+                }
+
+                "custom", "service" -> {
+                    // I have absolutely no idea what those commands do and why they exist
+                    ignoredCommands++
+                    return@mapNotNull null
+                }
+
+                !in setOf("app", "core") -> {
+                    logger.error("Unknown command type: ${command.type}")
+                    null
                 }
 
                 else -> command
             }
         }
 
-        if (normalizedCommands.size != commands.size) {
+        if (normalizedCommands.size != commands.size && normalizedCommands.size != (commands.size - ignoredCommands)) {
             logger.error("Invalid command snapshot; skipping synchronization")
             return
         }
