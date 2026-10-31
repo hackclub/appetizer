@@ -577,18 +577,186 @@ object InstallRequestRepository {
         return newStateId
     }
 
-    suspend fun getRestrictedScopes(): List<RestrictedScope> {
+    suspend fun getScopeRules(): List<ScopeRule> {
         return try {
             DatabaseManager.transaction {
-                RestrictedScopesTable.selectAll().map {
-                    RestrictedScope(
-                        it[RestrictedScopesTable.scope],
-                        it[RestrictedScopesTable.restricted],
-                        it[RestrictedScopesTable.scopeType],
-                        it[RestrictedScopesTable.review]
-                    )
-                }.toList()
+                val rules = ScopeRulesTable.selectAll()
+                    .orderBy(ScopeRulesTable.id to SortOrder.ASC)
+                    .map {
+                        ScopeRule(
+                            id = it[ScopeRulesTable.id],
+                            pattern = it[ScopeRulesTable.pattern],
+                            action = it[ScopeRulesTable.action],
+                            userTarget = it[ScopeRulesTable.userTarget],
+                            scopeType = it[ScopeRulesTable.scopeType],
+                            enabled = it[ScopeRulesTable.enabled],
+                            description = it[ScopeRulesTable.description],
+                            createdAt = it[ScopeRulesTable.createdAt],
+                            updatedAt = it[ScopeRulesTable.updatedAt]
+                        )
+                    }.toList()
+
+                if (rules.isEmpty()) {
+                    // Check if there are legacy restricted scopes to migrate
+                    val legacyScopes = RestrictedScopesTable.selectAll().map {
+                        RestrictedScope(
+                            it[RestrictedScopesTable.scope],
+                            it[RestrictedScopesTable.restricted],
+                            it[RestrictedScopesTable.scopeType],
+                            it[RestrictedScopesTable.review]
+                        )
+                    }.toList()
+
+                    if (legacyScopes.isNotEmpty()) {
+                        val now = Clock.System.now()
+                        legacyScopes.forEach { legacy ->
+                            val rule = legacy.toScopeRule()
+                            ScopeRulesTable.insert {
+                                it[pattern] = rule.pattern
+                                it[action] = rule.action
+                                it[userTarget] = rule.userTarget
+                                it[scopeType] = rule.scopeType
+                                it[enabled] = true
+                                it[description] = "Migrated from legacy restricted scope"
+                                it[createdAt] = now
+                                it[updatedAt] = now
+                            }
+                        }
+
+                        return@transaction ScopeRulesTable.selectAll().orderBy(ScopeRulesTable.id to SortOrder.ASC)
+                            .map {
+                                ScopeRule(
+                                    id = it[ScopeRulesTable.id],
+                                    pattern = it[ScopeRulesTable.pattern],
+                                    action = it[ScopeRulesTable.action],
+                                    userTarget = it[ScopeRulesTable.userTarget],
+                                    scopeType = it[ScopeRulesTable.scopeType],
+                                    enabled = it[ScopeRulesTable.enabled],
+                                    description = it[ScopeRulesTable.description],
+                                    createdAt = it[ScopeRulesTable.createdAt],
+                                    updatedAt = it[ScopeRulesTable.updatedAt]
+                                )
+                            }.toList()
+                    }
+                }
+
+                rules
             }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error getting scope rules", e)
+            throw e
+        }
+    }
+
+    suspend fun getScopeRule(id: Long): ScopeRule? {
+        return try {
+            DatabaseManager.transaction {
+                ScopeRulesTable.selectAll()
+                    .where { ScopeRulesTable.id eq id }
+                    .singleOrNull()
+                    ?.let {
+                        ScopeRule(
+                            id = it[ScopeRulesTable.id],
+                            pattern = it[ScopeRulesTable.pattern],
+                            action = it[ScopeRulesTable.action],
+                            userTarget = it[ScopeRulesTable.userTarget],
+                            scopeType = it[ScopeRulesTable.scopeType],
+                            enabled = it[ScopeRulesTable.enabled],
+                            description = it[ScopeRulesTable.description],
+                            createdAt = it[ScopeRulesTable.createdAt],
+                            updatedAt = it[ScopeRulesTable.updatedAt]
+                        )
+                    }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error getting scope rule $id", e)
+            throw e
+        }
+    }
+
+    suspend fun addScopeRule(rule: ScopeRule): ScopeRule {
+        return try {
+            DatabaseManager.transaction {
+                val now = Clock.System.now()
+                val id = ScopeRulesTable.insert {
+                    it[pattern] = rule.pattern.trim()
+                    it[action] = rule.action
+                    it[userTarget] = rule.userTarget
+                    it[scopeType] = rule.scopeType
+                    it[enabled] = rule.enabled
+                    it[description] = rule.description?.trim()
+                    it[createdAt] = now
+                    it[updatedAt] = now
+                }[ScopeRulesTable.id]
+
+                rule.copy(id = id, createdAt = now, updatedAt = now)
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error adding scope rule ${rule.pattern}", e)
+            throw e
+        }
+    }
+
+    suspend fun updateScopeRule(rule: ScopeRule): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                val now = Clock.System.now()
+                ScopeRulesTable.update({ ScopeRulesTable.id eq rule.id }) {
+                    it[pattern] = rule.pattern.trim()
+                    it[action] = rule.action
+                    it[userTarget] = rule.userTarget
+                    it[scopeType] = rule.scopeType
+                    it[enabled] = rule.enabled
+                    it[description] = rule.description?.trim()
+                    it[updatedAt] = now
+                } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error updating scope rule ${rule.id}", e)
+            throw e
+        }
+    }
+
+    suspend fun deleteScopeRule(id: Long): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                ScopeRulesTable.deleteWhere { ScopeRulesTable.id eq id } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error deleting scope rule $id", e)
+            throw e
+        }
+    }
+
+    suspend fun toggleScopeRule(id: Long): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                val current = ScopeRulesTable.select(ScopeRulesTable.enabled)
+                    .where { ScopeRulesTable.id eq id }
+                    .singleOrNull() ?: return@transaction false
+
+                val newEnabled = !current[ScopeRulesTable.enabled]
+                val now = Clock.System.now()
+                ScopeRulesTable.update({ ScopeRulesTable.id eq id }) {
+                    it[enabled] = newEnabled
+                    it[updatedAt] = now
+                } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error toggling scope rule $id", e)
+            throw e
+        }
+    }
+
+    suspend fun getRestrictedScopes(): List<RestrictedScope> {
+        return try {
+            getScopeRules().map { RestrictedScope.fromScopeRule(it) }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             logger.error("Error getting restricted scopes", e)
@@ -676,7 +844,23 @@ object InstallRequestRepository {
 
     suspend fun setScope(pattern: String, level: RestrictionLevel, type: ScopeType, requiresReview: Boolean) {
         try {
+            val legacy = RestrictedScope(pattern, level, type, requiresReview)
+            val rule = legacy.toScopeRule()
             DatabaseManager.transaction {
+                val now = Clock.System.now()
+                ScopeRulesTable.deleteWhere {
+                    (ScopeRulesTable.pattern eq pattern) and (ScopeRulesTable.scopeType eq type)
+                }
+                ScopeRulesTable.insert {
+                    it[ScopeRulesTable.pattern] = rule.pattern
+                    it[ScopeRulesTable.action] = rule.action
+                    it[ScopeRulesTable.userTarget] = rule.userTarget
+                    it[ScopeRulesTable.scopeType] = rule.scopeType
+                    it[ScopeRulesTable.enabled] = true
+                    it[ScopeRulesTable.createdAt] = now
+                    it[ScopeRulesTable.updatedAt] = now
+                }
+
                 RestrictedScopesTable.deleteWhere {
                     (RestrictedScopesTable.scope eq pattern) and (RestrictedScopesTable.scopeType eq type)
                 }
@@ -697,6 +881,10 @@ object InstallRequestRepository {
     suspend fun resetScope(pattern: String, type: ScopeType): Int {
         return try {
             DatabaseManager.transaction {
+                ScopeRulesTable.deleteWhere {
+                    (ScopeRulesTable.pattern eq pattern) and
+                            (if (type == ScopeType.BOTH) Op.TRUE else (ScopeRulesTable.scopeType eq type))
+                }
                 RestrictedScopesTable.deleteWhere {
                     (RestrictedScopesTable.scope eq pattern) and
                             (if (type == ScopeType.BOTH) Op.TRUE else (RestrictedScopesTable.scopeType eq type))
@@ -713,7 +901,12 @@ object InstallRequestRepository {
         return try {
             DatabaseManager.transaction {
                 InstallRequestTable.select(InstallRequestTable.requestId)
-                    .where { InstallRequestTable.status inList listOf(RequestStatus.DENIED, RequestStatus.PENDING_REVIEW) and InstallRequestTable.resolution.isNull() }
+                    .where {
+                        InstallRequestTable.status inList listOf(
+                            RequestStatus.DENIED,
+                            RequestStatus.PENDING_REVIEW
+                        ) and InstallRequestTable.resolution.isNull()
+                    }
                     .map { it[InstallRequestTable.requestId] }
                     .toList()
             }

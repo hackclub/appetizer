@@ -2,6 +2,8 @@ package com.fantamomo.slack.approver.manager
 
 import com.fantamomo.slack.approver.data.Constants.BULLET
 import com.fantamomo.slack.approver.model.RestrictionLevel
+import com.fantamomo.slack.approver.model.RuleAction
+import com.fantamomo.slack.approver.model.RuleUserTarget
 import com.fantamomo.slack.approver.model.ScopeType
 import com.fantamomo.slack.approver.slack.SlackWorkflowService
 import io.ktor.http.*
@@ -90,29 +92,26 @@ object CommandManager {
     }
 
     private suspend fun listScopes(url: Url) {
-        val scopes = InstallRequestRepository.getRestrictedScopes()
-        if (scopes.isEmpty()) {
-            reply(url, ":information_source: No scope configuration exists yet.")
+        val rules = InstallRequestRepository.getScopeRules()
+        if (rules.isEmpty()) {
+            reply(url, ":information_source: No scope rules configured yet.")
             return
         }
         val text = buildString {
-            for (level in RestrictionLevel.entries) {
-                val group = scopes.filter { it.level == level }.sortedBy { it.pattern }
-                if (group.isEmpty()) continue
-                append(
-                    when (level) {
-                        RestrictionLevel.RESTRICTED -> ":no_entry_sign: *Restricted*"
-                        RestrictionLevel.ALLOWED_FOR_UNVERIFIED -> ":unlock: *Allowed for unverified users*"
-                        RestrictionLevel.ALLOWED -> ":white_check_mark: *Allowed*"
-                    }
-                )
-                append('\n')
-                for (s in group) {
-                    append("$BULLET `${s.pattern}` [${s.scopeType}]")
-                    if (level == RestrictionLevel.RESTRICTED) append(if (s.review) " – review" else " – declined")
-                    append('\n')
+            append("*Scope Rules (${rules.size}):*\n")
+            for (rule in rules) {
+                val statusBadge = if (rule.enabled) ":white_check_mark:" else ":double_vertical_bar:"
+                val actionBadge = when (rule.action) {
+                    RuleAction.ALLOW -> "*ALLOW*"
+                    RuleAction.REVIEW -> "*REVIEW*"
+                    RuleAction.BLOCK -> "*BLOCK*"
                 }
-                append('\n')
+                val targetLabel = when (rule.userTarget) {
+                    RuleUserTarget.ALL -> "Everyone"
+                    RuleUserTarget.VERIFIED -> "Verified Users"
+                    RuleUserTarget.UNVERIFIED -> "Unverified Users"
+                }
+                append("$BULLET $statusBadge `#${rule.id}` `${rule.pattern}` [${rule.scopeType}] → $actionBadge for *$targetLabel*\n")
             }
         }
         reply(url, text.trim())

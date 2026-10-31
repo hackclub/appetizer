@@ -13,15 +13,16 @@ sealed interface ScopeMatcher {
         override val priority = 1
 
         override fun match(scope: String): Boolean =
-            this.scope == scope
+            this.scope.equals(scope.trim(), ignoreCase = true)
     }
 
     data class PrefixScopeMatcher(
         val prefix: String
     ) : ScopeMatcher {
         override val priority = 2
+
         override fun match(scope: String): Boolean =
-            scope.startsWith(prefix)
+            scope.trim().startsWith(prefix, ignoreCase = true)
     }
 
     data class WildcardScopeMatcher(
@@ -31,7 +32,7 @@ sealed interface ScopeMatcher {
 
         private val regex: Regex = buildRegex(pattern)
 
-        override fun match(scope: String) = regex.matches(scope)
+        override fun match(scope: String): Boolean = regex.matches(scope.trim())
 
         private fun buildRegex(pattern: String): Regex {
             val regex = buildString {
@@ -47,21 +48,20 @@ sealed interface ScopeMatcher {
                 append("$")
             }
 
-            return Regex(regex)
+            return Regex(regex, RegexOption.IGNORE_CASE)
         }
     }
 
     data class RegexScopeMatcher(val pattern: String) : ScopeMatcher {
-        val regex: Regex = Regex(pattern)
+        val regex: Regex = Regex(pattern, RegexOption.IGNORE_CASE)
         override val priority: Int = 4
 
-        override fun match(scope: String) = regex.matches(scope)
-
+        override fun match(scope: String): Boolean = regex.matches(scope.trim())
     }
 
     data object AllScopeMatcher : ScopeMatcher {
-        override val priority: Int = Int.MAX_VALUE
-        override fun match(scope: String) = true
+        override val priority: Int = 100
+        override fun match(scope: String): Boolean = true
     }
 
     companion object {
@@ -69,14 +69,26 @@ sealed interface ScopeMatcher {
         val ALL_SCOPES = AllScopeMatcher
 
         fun fromString(scope: String): ScopeMatcher {
-            if (scope.startsWith('/')) return RegexScopeMatcher(scope.substring(1))
-            val starIndex = scope.indexOf('*')
-            if (starIndex != -1) {
-                if (scope.length == 1) return ALL_SCOPES
-                if (scope.length == starIndex + 1 && (scope[starIndex - 1] == ':' || scope[starIndex - 1] == '.')) return PrefixScopeMatcher(scope.substring(0, starIndex))
-                return WildcardScopeMatcher(scope)
+            val trimmed = scope.trim()
+            if (trimmed == "*") return ALL_SCOPES
+            if (trimmed.startsWith('/') && trimmed.endsWith('/') && trimmed.length > 2) {
+                return RegexScopeMatcher(trimmed.substring(1, trimmed.length - 1))
             }
-            return DirectScopeMatcher(scope)
+            if (trimmed.startsWith('/')) {
+                return RegexScopeMatcher(trimmed.substring(1))
+            }
+            val starIndex = trimmed.indexOf('*')
+            if (starIndex != -1) {
+                if (trimmed.length == 1) return ALL_SCOPES
+                if (trimmed.length == starIndex + 1 && (trimmed[starIndex - 1] == ':' || trimmed[starIndex - 1] == '.')) {
+                    return PrefixScopeMatcher(trimmed.substring(0, starIndex))
+                }
+                return WildcardScopeMatcher(trimmed)
+            }
+            if (trimmed.endsWith(':') || trimmed.endsWith('.')) {
+                return PrefixScopeMatcher(trimmed)
+            }
+            return DirectScopeMatcher(trimmed)
         }
     }
 }

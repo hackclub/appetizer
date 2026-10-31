@@ -233,7 +233,7 @@ object AppManager {
         logger.info("Handling request: {}", request.id)
 
         val isVerified = VerificationManager.isVerified(request.user.id)
-        val restrictedScopes = InstallRequestRepository.getRestrictedScopes()
+        val scopeRules = InstallRequestRepository.getScopeRules()
         val isAppRestricted = InstallRequestRepository.isAppRestricted(request.app.id)
         val previousRequests =
             InstallRequestRepository.findPreviousRequests(request.app.id, request.user.id, request.id)
@@ -259,7 +259,7 @@ object AppManager {
         val decisionContext = DecisionContext(
             request = request,
             isUserVerified = isVerified,
-            restrictedScopes = restrictedScopes,
+            scopeRules = scopeRules,
             isAppRestricted = isAppRestricted,
             previousRequests = previousRequests,
             commandsAllReadyInUse = commandsAllReadyInUse,

@@ -5,9 +5,7 @@ import com.fantamomo.slack.approver.manager.CommandManager
 import com.fantamomo.slack.approver.manager.InstallRequestRepository
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
-import com.fantamomo.slack.approver.model.RequestDecision
-import com.fantamomo.slack.approver.model.RequestDecisionReason
-import com.fantamomo.slack.approver.model.RequestStatus
+import com.fantamomo.slack.approver.model.*
 import com.fantamomo.slack.approver.slack.SlackWorkflowService.buildAreYouSureModal
 import io.ktor.http.*
 import kotlinx.serialization.json.*
@@ -93,6 +91,10 @@ object SlackInteractionHandler {
                 "user_withdraw_request" -> handleUserWithdrawRequest(userId, value)
                 "home_team" -> SlackWorkflowService.setHomeMode(userId, false, updateHome = false)
                 "home_admin" -> SlackWorkflowService.setHomeMode(userId, true, updateHome = false)
+                "admin_add_scope_rule" -> handleAdminAddScopeRule(userId, triggerId)
+                "admin_edit_scope_rule" -> handleAdminEditScopeRule(userId, value, triggerId)
+                "admin_toggle_scope_rule" -> handleAdminToggleScopeRule(userId, value)
+                "admin_delete_scope_rule" -> handleAdminDeleteScopeRule(userId, value, triggerId)
             }
         }
 
@@ -348,6 +350,8 @@ object SlackInteractionHandler {
                     logger.warn("Received request_owner_approve callback from user $userId, but ALLOW_APPROVING_OWN is false")
                 }
             }
+            "modal_scope_rule_submit" -> executeScopeRuleSubmit(userId, view, privateMetadata, triggerId)
+            "modal_delete_scope_rule_submit" -> executeDeleteScopeRuleSubmit(userId, privateMetadata, triggerId)
 
             else -> logger.warn("Received unknown callback id $callbackId from user $userId")
         }
@@ -660,6 +664,155 @@ object SlackInteractionHandler {
             action = "WITHDRAW",
             appId = record.appId
         )
+    }
+
+    private suspend fun handleAdminAddScopeRule(userId: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to add scope rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val modal = SlackWorkflowService.buildScopeRuleModal(
+            title = "Add Scope Rule",
+            callbackId = "modal_scope_rule_submit",
+            rule = null
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private suspend fun handleAdminEditScopeRule(userId: String, ruleIdStr: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to edit scope rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        val rule = InstallRequestRepository.getScopeRule(ruleId) ?: return
+        val modal = SlackWorkflowService.buildScopeRuleModal(
+            title = "Edit Scope Rule",
+            callbackId = "modal_scope_rule_submit",
+            rule = rule
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private suspend fun handleAdminToggleScopeRule(userId: String, ruleIdStr: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to toggle scope rules")
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        InstallRequestRepository.toggleScopeRule(ruleId)
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    private suspend fun handleAdminDeleteScopeRule(userId: String, ruleIdStr: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to delete scope rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        val rule = InstallRequestRepository.getScopeRule(ruleId) ?: return
+        val modal = SlackWorkflowService.buildAreYouSureModal(
+            title = "Delete Scope Rule",
+            callbackId = "modal_delete_scope_rule_submit",
+            metadata = rule.id.toString(),
+            submitButton = "Delete",
+            cancelButton = "Cancel",
+            message = "Are you sure you want to delete the scope rule for pattern `${rule.pattern}`? This action cannot be undone."
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private fun extractInputValue(values: JsonObject?, blockId: String, actionId: String): String? {
+        val block = values?.get(blockId) as? JsonObject ?: return null
+        val element = block[actionId] as? JsonObject ?: return null
+        return (element["value"] as? JsonPrimitive)?.contentOrNull
+    }
+
+    private fun extractSelectedOption(values: JsonObject?, blockId: String, actionId: String): String? {
+        val block = values?.get(blockId) as? JsonObject ?: return null
+        val element = block[actionId] as? JsonObject ?: return null
+        val option = element["selected_option"] as? JsonObject ?: return null
+        return (option["value"] as? JsonPrimitive)?.contentOrNull
+    }
+
+    private suspend fun executeScopeRuleSubmit(
+        userId: String,
+        view: JsonObject,
+        privateMetadata: String,
+        triggerId: String?
+    ) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to submit scope rules")
+            if (triggerId != null) openUnauthorizedError(triggerId)
+            return
+        }
+
+        val values = view["state"]?.jsonObject?.get("values") as? JsonObject
+        val pattern = extractInputValue(values, "pattern_block", "pattern_input")?.trim()
+        if (pattern.isNullOrBlank()) {
+            logger.warn("Scope rule submission missing pattern")
+            return
+        }
+
+        val actionStr = extractSelectedOption(values, "action_block", "action_input")
+        val action = actionStr?.let { runCatching { RuleAction.valueOf(it) }.getOrNull() } ?: RuleAction.ALLOW
+
+        val targetStr = extractSelectedOption(values, "target_block", "target_input")
+        val userTarget = targetStr?.let { runCatching { RuleUserTarget.valueOf(it) }.getOrNull() } ?: RuleUserTarget.ALL
+
+        val scopeTypeStr = extractSelectedOption(values, "scope_type_block", "scope_type_input")
+        val scopeType = scopeTypeStr?.let { runCatching { ScopeType.valueOf(it) }.getOrNull() } ?: ScopeType.BOTH
+
+        val description = extractInputValue(values, "description_block", "description_input")?.trim()
+
+        val existingId = privateMetadata.toLongOrNull()
+        if (existingId != null && existingId > 0) {
+            val existing = InstallRequestRepository.getScopeRule(existingId)
+            val updated = ScopeRule(
+                id = existingId,
+                pattern = pattern,
+                action = action,
+                userTarget = userTarget,
+                scopeType = scopeType,
+                enabled = existing?.enabled ?: true,
+                description = description
+            )
+            InstallRequestRepository.updateScopeRule(updated)
+            logger.info("Updated scope rule $existingId by user $userId")
+        } else {
+            val newRule = ScopeRule(
+                pattern = pattern,
+                action = action,
+                userTarget = userTarget,
+                scopeType = scopeType,
+                enabled = true,
+                description = description
+            )
+            InstallRequestRepository.addScopeRule(newRule)
+            logger.info("Created new scope rule for pattern $pattern by user $userId")
+        }
+
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    private suspend fun executeDeleteScopeRuleSubmit(
+        userId: String,
+        privateMetadata: String,
+        triggerId: String?
+    ) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to delete scope rule")
+            if (triggerId != null) openUnauthorizedError(triggerId)
+            return
+        }
+
+        val ruleId = privateMetadata.toLongOrNull() ?: return
+        InstallRequestRepository.deleteScopeRule(ruleId)
+        logger.info("Deleted scope rule $ruleId by user $userId")
+        SlackWorkflowService.publishAppHome(userId)
     }
 
     private suspend fun openUnauthorizedError(triggerId: String) {

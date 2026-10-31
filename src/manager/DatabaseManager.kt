@@ -98,6 +98,7 @@ object DatabaseManager {
                     AppRestrictionTable,
                     InstallRequestHistoryTable,
                     RestrictedScopesTable,
+                    ScopeRulesTable,
                 )
                 MigrationTable.batchInsert(migrationFiles) {
                     this[MigrationTable.migration] = it

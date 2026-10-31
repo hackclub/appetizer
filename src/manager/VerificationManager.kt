@@ -104,7 +104,7 @@ object VerificationManager {
                 resolution = record.slackResolution?.value?.let { Resolution(it) },
             )
 
-            val restrictedScopes = InstallRequestRepository.getRestrictedScopes()
+            val scopeRules = InstallRequestRepository.getScopeRules()
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
@@ -119,7 +119,7 @@ object VerificationManager {
                 DecisionContext(
                     request = dummyRequest,
                     isUserVerified = true,
-                    restrictedScopes = restrictedScopes,
+                    scopeRules = scopeRules,
                     isAppRestricted = isAppRestricted,
                     previousRequests = previousRequests,
                     commandsAllReadyInUse = commandsAllReadyInUse,

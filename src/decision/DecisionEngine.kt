@@ -72,50 +72,36 @@ object DecisionEngine {
             )
         }
 
-        // 5. check all the scopes
-        val nonReviewableRestrictedScopes = mutableListOf<String>()
-        val reviewableRestrictedScopes = mutableListOf<String>()
+        // 5. check all the scopes using rule evaluation
+        val blockedScopes = mutableListOf<String>()
+        val reviewScopes = mutableListOf<String>()
         val unallowedForUnverifiedScopes = mutableListOf<String>()
 
         for (requestedScope in context.request.scopes) {
             val scopeName = requestedScope.name.trim()
             val tokenType = requestedScope.tokenType.trim()
 
-            val matches = context.restrictedScopes.filter { rule ->
-                val typeMatches = when (rule.scopeType) {
-                    ScopeType.BOTH -> true
-                    ScopeType.USER -> tokenType.equals("user", ignoreCase = true)
-                    ScopeType.BOT -> tokenType.equals("bot", ignoreCase = true)
-                }
-                typeMatches && rule.scope.match(scopeName)
+            val matchingRules = context.scopeRules.filter { rule ->
+                rule.matches(scopeName, tokenType, context.isUserVerified)
             }
 
-            if (matches.isEmpty()) {
-                unallowedForUnverifiedScopes.add(scopeName)
+            if (matchingRules.isEmpty()) {
+                if (!context.isUserVerified) {
+                    unallowedForUnverifiedScopes.add(scopeName)
+                }
                 continue
             }
 
-            val highestPriority = matches.minOf { it.scope.priority }
-            val bestMatches = matches.filter { it.scope.priority == highestPriority }
+            val bestRule = matchingRules.sortedWith(ScopeRulePrecedenceComparator).first()
 
-            val isRestricted = bestMatches.any { it.level == RestrictionLevel.RESTRICTED }
-            val isAllowedForUnverified = bestMatches.any { it.level == RestrictionLevel.ALLOWED_FOR_UNVERIFIED }
-
-            if (isRestricted) {
-                val requiresReviewOnly = bestMatches.filter { it.level == RestrictionLevel.RESTRICTED }.all { it.review }
-                if (requiresReviewOnly) {
-                    reviewableRestrictedScopes.add(scopeName)
-                } else {
-                    nonReviewableRestrictedScopes.add(scopeName)
-                }
-            }
-
-            if (!isAllowedForUnverified) {
-                unallowedForUnverifiedScopes.add(scopeName)
+            when (bestRule.action) {
+                RuleAction.BLOCK -> blockedScopes.add(scopeName)
+                RuleAction.REVIEW -> reviewScopes.add(scopeName)
+                RuleAction.ALLOW -> { /* explicitly allowed */ }
             }
         }
 
-        val allRestrictedScopes = (nonReviewableRestrictedScopes + reviewableRestrictedScopes).distinct()
+        val allNonAllowedScopes = (blockedScopes + reviewScopes + unallowedForUnverifiedScopes).distinct()
 
         val previousApprovedRequests = context.previousRequests.filter { prev ->
             !prev.isEnterprise && (prev.status == RequestStatus.APPROVED || prev.resolution == RequestDecision.APPROVED)
@@ -123,7 +109,7 @@ object DecisionEngine {
         val previouslyApprovedScopeNames = previousApprovedRequests.flatMap { it.scopes.map { s -> s.name.trim().lowercase() } }.toSet()
 
         if (previousApprovedRequests.isNotEmpty()) {
-            val newlyRestrictedScopes = allRestrictedScopes.filter { scope -> !previouslyApprovedScopeNames.contains(scope.lowercase()) }
+            val newlyRestrictedScopes = allNonAllowedScopes.filter { scope -> !previouslyApprovedScopeNames.contains(scope.lowercase()) }
             // 6. if the request has been previously approved with some restricted scopes, but no new restricted scopes, approve the request
             if (newlyRestrictedScopes.isEmpty()) {
                 if (context.isUserVerified) {
@@ -133,60 +119,38 @@ object DecisionEngine {
                         explanation = "Request automatically approved: all requested restricted scopes were previously approved for this user."
                     )
                 } else {
-                    val newlyUnallowedScopes = unallowedForUnverifiedScopes.filter { scope -> !previouslyApprovedScopeNames.contains(scope.lowercase()) }
-                    if (newlyUnallowedScopes.isEmpty()) {
-                        return DecisionResult(
-                            status = RequestStatus.APPROVED,
-                            reason = RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES,
-                            explanation = "Request automatically approved: all requested scopes were previously approved."
-                        )
-                    }
+                    return DecisionResult(
+                        status = RequestStatus.APPROVED,
+                        reason = RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES,
+                        explanation = "Request automatically approved: all requested scopes were previously approved."
+                    )
                 }
             }
         }
 
-        // 7. if the request contains at least one non-reviewable restricted scope, deny the request
-        if (nonReviewableRestrictedScopes.isNotEmpty()) {
+        // 7. if the request contains at least one blocked scope, deny the request
+        if (blockedScopes.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.DENIED,
                 reason = RequestDecisionReason.RESTRICTED_SCOPE,
-                relevantRestrictedScopes = allRestrictedScopes,
+                relevantRestrictedScopes = blockedScopes.distinct(),
                 requiresManualReview = false,
                 explanation = "The request contains restricted scopes that cannot be approved."
             )
         }
 
-        if (context.isUserVerified) {
-            // 8. if the request contains at least one reviewable restricted scope, send to manual review
-            if (reviewableRestrictedScopes.isNotEmpty()) {
-                return DecisionResult(
-                    status = RequestStatus.PENDING_REVIEW,
-                    reason = RequestDecisionReason.RESTRICTED_SCOPE,
-                    relevantRestrictedScopes = reviewableRestrictedScopes.distinct(),
-                    requiresManualReview = true,
-                    explanation = "The request contains restricted scopes requiring manual review."
-                )
-            }
-            // 9. if the request contains no restricted scopes, approve the request
+        // 8. if the request contains reviewable scopes, send to manual review
+        if (reviewScopes.isNotEmpty()) {
             return DecisionResult(
-                status = RequestStatus.APPROVED,
-                reason = RequestDecisionReason.USER_VERIFIED,
-                explanation = "Request automatically approved for verified user."
-            )
-        }
-
-        // 10. if we get here and there are still restricted scopes, deny the request
-        if (allRestrictedScopes.isNotEmpty()) {
-            return DecisionResult(
-                status = RequestStatus.DENIED,
+                status = RequestStatus.PENDING_REVIEW,
                 reason = RequestDecisionReason.RESTRICTED_SCOPE,
-                relevantRestrictedScopes = allRestrictedScopes,
-                requiresManualReview = false,
-                explanation = "The request contains restricted scopes."
+                relevantRestrictedScopes = reviewScopes.distinct(),
+                requiresManualReview = true,
+                explanation = "The request contains restricted scopes requiring manual review."
             )
         }
 
-        // 11. if the user is not verified and there are restricted scopes, deny the request
+        // 9. if the user is unverified and has scopes not explicitly allowed, deny
         if (unallowedForUnverifiedScopes.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.DENIED,
@@ -197,11 +161,19 @@ object DecisionEngine {
             )
         }
 
-        // 12. if we get here, approve the request
-        return DecisionResult(
-            status = RequestStatus.APPROVED,
-            reason = RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES,
-            explanation = "Request automatically approved because all requested scopes are allowed for unverified users."
-        )
+        // 10. approve the request
+        return if (context.isUserVerified) {
+            DecisionResult(
+                status = RequestStatus.APPROVED,
+                reason = RequestDecisionReason.USER_VERIFIED,
+                explanation = "Request automatically approved for verified user."
+            )
+        } else {
+            DecisionResult(
+                status = RequestStatus.APPROVED,
+                reason = RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES,
+                explanation = "Request automatically approved because all requested scopes are allowed for unverified users."
+            )
+        }
     }
 }

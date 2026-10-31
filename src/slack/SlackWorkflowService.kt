@@ -1190,34 +1190,10 @@ object SlackWorkflowService {
 
     private suspend fun publishAdminHome(userId: String) {
         val members = InstallRequestRepository.getTeamMembers()
-        val scopes = InstallRequestRepository.getRestrictedScopes()
+        val rules = InstallRequestRepository.getScopeRules()
 
         val membersText =
             if (members.isEmpty()) "No team members yet." else members.joinToString("\n") { "$BULLET <@$it>" }
-        val scopesText = if (scopes.isEmpty()) {
-            "No scope configuration exists yet."
-        } else {
-            buildString {
-                for (level in RestrictionLevel.entries) {
-                    val group = scopes.filter { it.level == level }.sortedBy { it.pattern }
-                    if (group.isEmpty()) continue
-                    append(
-                        when (level) {
-                            RestrictionLevel.RESTRICTED -> ":no_entry_sign: *Restricted*"
-                            RestrictionLevel.ALLOWED_FOR_UNVERIFIED -> ":unlock: *Allowed for unverified users*"
-                            RestrictionLevel.ALLOWED -> ":white_check_mark: *Allowed*"
-                        }
-                    )
-                    append('\n')
-                    for (s in group) {
-                        append("$BULLET `${s.pattern}` [${s.scopeType}]")
-                        if (level == RestrictionLevel.RESTRICTED) append(if (s.review) " – review" else " – declined")
-                        append('\n')
-                    }
-                    append('\n')
-                }
-            }.trim()
-        }
 
         SlackManager.publishHomeView(userId) {
             homeSwitch(true)
@@ -1233,11 +1209,275 @@ object SlackWorkflowService {
             }
             divider()
             header {
-                text("Scope Configuration", true)
+                text("Scope Rules (${rules.size})", true)
             }
-            section {
-                markdownText(scopesText.take(3000))
+            actions {
+                button {
+                    text("➕ Add Scope Rule", true)
+                    actionId("admin_add_scope_rule")
+                    value("add")
+                    style("primary")
+                }
+            }
+            if (rules.isEmpty()) {
+                section {
+                    markdownText(":information_source: *No scope rules configured yet.* Click *Add Scope Rule* above to create your first rule.")
+                }
+            } else {
+                for (rule in rules) {
+                    val statusBadge = if (rule.enabled) ":white_check_mark: Enabled" else ":double_vertical_bar: Disabled"
+                    val actionBadge = when (rule.action) {
+                        RuleAction.ALLOW -> ":white_check_mark: *ALLOW*"
+                        RuleAction.REVIEW -> ":hourglass_flowing_sand: *REVIEW*"
+                        RuleAction.BLOCK -> ":no_entry_sign: *BLOCK*"
+                    }
+                    val targetLabel = when (rule.userTarget) {
+                        RuleUserTarget.ALL -> "Everyone"
+                        RuleUserTarget.VERIFIED -> "Verified Users"
+                        RuleUserTarget.UNVERIFIED -> "Unverified Users"
+                    }
+                    val descText = if (!rule.description.isNullOrBlank()) "\n>_${rule.description}_" else ""
+
+                    section {
+                        markdownText(
+                            "*Rule #${rule.id}:* `${rule.pattern}` [${rule.scopeType}]\n" +
+                                    "• *Action:* $actionBadge for *$targetLabel*\n" +
+                                    "• *Status:* $statusBadge$descText"
+                        )
+                    }
+                    actions {
+                        button {
+                            text("Edit", true)
+                            actionId("admin_edit_scope_rule")
+                            value(rule.id.toString())
+                        }
+                        if (rule.enabled) {
+                            button {
+                                text("Disable", true)
+                                actionId("admin_toggle_scope_rule")
+                                value(rule.id.toString())
+                            }
+                        } else {
+                            button {
+                                text("Enable", true)
+                                actionId("admin_toggle_scope_rule")
+                                value(rule.id.toString())
+                                style("primary")
+                            }
+                        }
+                        button {
+                            text("Delete", true)
+                            actionId("admin_delete_scope_rule")
+                            value(rule.id.toString())
+                            style("danger")
+                        }
+                    }
+                    divider()
+                }
             }
         }
+    }
+
+    fun buildScopeRuleModal(
+        title: String,
+        callbackId: String,
+        rule: ScopeRule? = null
+    ): JsonObject {
+        val view = JsonObject()
+        view.addProperty("type", "modal")
+        view.addProperty("callback_id", callbackId)
+        view.addProperty("private_metadata", rule?.id?.toString() ?: "")
+
+        val titleObj = JsonObject()
+        titleObj.addProperty("type", "plain_text")
+        titleObj.addProperty("text", title.take(24))
+        titleObj.addProperty("emoji", true)
+        view.add("title", titleObj)
+
+        val submitObj = JsonObject()
+        submitObj.addProperty("type", "plain_text")
+        submitObj.addProperty("text", if (rule == null) "Create Rule" else "Save Changes")
+        submitObj.addProperty("emoji", true)
+        view.add("submit", submitObj)
+
+        val closeObj = JsonObject()
+        closeObj.addProperty("type", "plain_text")
+        closeObj.addProperty("text", "Cancel")
+        closeObj.addProperty("emoji", true)
+        view.add("close", closeObj)
+
+        val blocks = JsonArray()
+
+        // 1. Pattern input block
+        val patternBlock = JsonObject()
+        patternBlock.addProperty("type", "input")
+        patternBlock.addProperty("block_id", "pattern_block")
+        val patternLabel = JsonObject()
+        patternLabel.addProperty("type", "plain_text")
+        patternLabel.addProperty("text", "Scope Pattern")
+        patternBlock.add("label", patternLabel)
+        val patternElement = JsonObject()
+        patternElement.addProperty("type", "plain_text_input")
+        patternElement.addProperty("action_id", "pattern_input")
+        val patternPlaceholder = JsonObject()
+        patternPlaceholder.addProperty("type", "plain_text")
+        patternPlaceholder.addProperty("text", "e.g. chat:write, admin:*, *, /^users:.*/")
+        patternElement.add("placeholder", patternPlaceholder)
+        if (rule != null) {
+            patternElement.addProperty("initial_value", rule.pattern)
+        }
+        patternBlock.add("element", patternElement)
+        blocks.add(patternBlock)
+
+        // 2. Action block (static_select)
+        val actionBlock = JsonObject()
+        actionBlock.addProperty("type", "input")
+        actionBlock.addProperty("block_id", "action_block")
+        val actionLabel = JsonObject()
+        actionLabel.addProperty("type", "plain_text")
+        actionLabel.addProperty("text", "Action")
+        actionBlock.add("label", actionLabel)
+        val actionElement = JsonObject()
+        actionElement.addProperty("type", "static_select")
+        actionElement.addProperty("action_id", "action_input")
+        val actionOptions = JsonArray()
+        for (action in RuleAction.entries) {
+            val opt = JsonObject()
+            val text = JsonObject()
+            text.addProperty("type", "plain_text")
+            text.addProperty("text", when (action) {
+                RuleAction.ALLOW -> "ALLOW (Automatically approve)"
+                RuleAction.REVIEW -> "REVIEW (Require manual review)"
+                RuleAction.BLOCK -> "BLOCK (Automatically decline)"
+            })
+            opt.add("text", text)
+            opt.addProperty("value", action.name)
+            actionOptions.add(opt)
+        }
+        actionElement.add("options", actionOptions)
+        val selectedAction = rule?.action ?: RuleAction.ALLOW
+        val initialActionOpt = JsonObject().apply {
+            val t = JsonObject()
+            t.addProperty("type", "plain_text")
+            t.addProperty("text", when (selectedAction) {
+                RuleAction.ALLOW -> "ALLOW (Automatically approve)"
+                RuleAction.REVIEW -> "REVIEW (Require manual review)"
+                RuleAction.BLOCK -> "BLOCK (Automatically decline)"
+            })
+            add("text", t)
+            addProperty("value", selectedAction.name)
+        }
+        actionElement.add("initial_option", initialActionOpt)
+        actionBlock.add("element", actionElement)
+        blocks.add(actionBlock)
+
+        // 3. User Target block (static_select)
+        val targetBlock = JsonObject()
+        targetBlock.addProperty("type", "input")
+        targetBlock.addProperty("block_id", "target_block")
+        val targetLabel = JsonObject()
+        targetLabel.addProperty("type", "plain_text")
+        targetLabel.addProperty("text", "User Verification Status")
+        targetBlock.add("label", targetLabel)
+        val targetElement = JsonObject()
+        targetElement.addProperty("type", "static_select")
+        targetElement.addProperty("action_id", "target_input")
+        val targetOptions = JsonArray()
+        for (target in RuleUserTarget.entries) {
+            val opt = JsonObject()
+            val text = JsonObject()
+            text.addProperty("type", "plain_text")
+            text.addProperty("text", when (target) {
+                RuleUserTarget.ALL -> "Everyone (All Users)"
+                RuleUserTarget.VERIFIED -> "Verified Users Only"
+                RuleUserTarget.UNVERIFIED -> "Unverified Users Only"
+            })
+            opt.add("text", text)
+            opt.addProperty("value", target.name)
+            targetOptions.add(opt)
+        }
+        targetElement.add("options", targetOptions)
+        val selectedTarget = rule?.userTarget ?: RuleUserTarget.ALL
+        val initialTargetOpt = JsonObject().apply {
+            val t = JsonObject()
+            t.addProperty("type", "plain_text")
+            t.addProperty("text", when (selectedTarget) {
+                RuleUserTarget.ALL -> "Everyone (All Users)"
+                RuleUserTarget.VERIFIED -> "Verified Users Only"
+                RuleUserTarget.UNVERIFIED -> "Unverified Users Only"
+            })
+            add("text", t)
+            addProperty("value", selectedTarget.name)
+        }
+        targetElement.add("initial_option", initialTargetOpt)
+        targetBlock.add("element", targetElement)
+        blocks.add(targetBlock)
+
+        // 4. Scope Type block (static_select)
+        val scopeTypeBlock = JsonObject()
+        scopeTypeBlock.addProperty("type", "input")
+        scopeTypeBlock.addProperty("block_id", "scope_type_block")
+        val scopeTypeLabel = JsonObject()
+        scopeTypeLabel.addProperty("type", "plain_text")
+        scopeTypeLabel.addProperty("text", "Scope Type")
+        scopeTypeBlock.add("label", scopeTypeLabel)
+        val scopeTypeElement = JsonObject()
+        scopeTypeElement.addProperty("type", "static_select")
+        scopeTypeElement.addProperty("action_id", "scope_type_input")
+        val scopeTypeOptions = JsonArray()
+        for (type in ScopeType.entries) {
+            val opt = JsonObject()
+            val text = JsonObject()
+            text.addProperty("type", "plain_text")
+            text.addProperty("text", when (type) {
+                ScopeType.BOTH -> "Both (User & Bot)"
+                ScopeType.BOT -> "Bot Scopes Only"
+                ScopeType.USER -> "User Scopes Only"
+            })
+            opt.add("text", text)
+            opt.addProperty("value", type.name)
+            scopeTypeOptions.add(opt)
+        }
+        scopeTypeElement.add("options", scopeTypeOptions)
+        val selectedScopeType = rule?.scopeType ?: ScopeType.BOTH
+        val initialScopeTypeOpt = JsonObject().apply {
+            val t = JsonObject()
+            t.addProperty("type", "plain_text")
+            t.addProperty("text", when (selectedScopeType) {
+                ScopeType.BOTH -> "Both (User & Bot)"
+                ScopeType.BOT -> "Bot Scopes Only"
+                ScopeType.USER -> "User Scopes Only"
+            })
+            add("text", t)
+            addProperty("value", selectedScopeType.name)
+        }
+        scopeTypeElement.add("initial_option", initialScopeTypeOpt)
+        scopeTypeBlock.add("element", scopeTypeElement)
+        blocks.add(scopeTypeBlock)
+
+        // 5. Description / Notes block (optional)
+        val descBlock = JsonObject()
+        descBlock.addProperty("type", "input")
+        descBlock.addProperty("block_id", "description_block")
+        descBlock.addProperty("optional", true)
+        val descLabel = JsonObject()
+        descLabel.addProperty("type", "plain_text")
+        descLabel.addProperty("text", "Description / Notes (Optional)")
+        descBlock.add("label", descLabel)
+        val descElement = JsonObject()
+        descElement.addProperty("type", "plain_text_input")
+        descElement.addProperty("action_id", "description_input")
+        val descPlaceholder = JsonObject()
+        descPlaceholder.addProperty("type", "plain_text")
+        descPlaceholder.addProperty("text", "e.g. Security policy for admin scopes")
+        descElement.add("placeholder", descPlaceholder)
+        if (!rule?.description.isNullOrBlank()) {
+            descElement.addProperty("initial_value", rule.description)
+        }
+        descBlock.add("element", descElement)
+        blocks.add(descBlock)
+
+        view.add("blocks", blocks)
+        return view
     }
 }
