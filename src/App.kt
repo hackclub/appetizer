@@ -4,7 +4,7 @@ import com.fantamomo.slack.approver.app.rootModule
 import com.fantamomo.slack.approver.data.Config
 import com.fantamomo.slack.approver.data.SharedData
 import com.fantamomo.slack.approver.manager.*
-import com.fantamomo.slack.approver.utils.substringBeforeCount
+import com.fantamomo.slack.approver.utils.maskSlackToken
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -249,12 +249,12 @@ object App {
             val scopeSummary = missingScopes.joinToString(", ") { scope ->
                 scope + (requiredScopes[scope]?.let { " ($it)" } ?: "")
             }
-            logger.error("Token ${token.substringBeforeCount("-", 1)} is missing required scopes: $scopeSummary")
+            logger.error("Token ${maskSlackToken(token)} is missing required scopes: $scopeSummary")
             return null
         }
         val unnecessaryScopes = scopes.filter { it !in requiredScopes }.filter { it != "identify" }
         if (unnecessaryScopes.isNotEmpty()) {
-            logger.warn("Token ${token.substringBeforeCount("-", 1)} " +
+            logger.warn("Token ${maskSlackToken(token)} " +
                     "has unnecessary scopes: ${unnecessaryScopes.joinToString(", ")}")
             logger.warn("Please remove unnecessary scopes from the token, to follow the least privilege principle.")
         }
@@ -282,19 +282,20 @@ object App {
             if ((jsonObject["ok"] as? JsonPrimitive)?.booleanOrNull != true) {
                 val error = (jsonObject["error"] as? JsonPrimitive)?.contentOrNull
                 if (dCookie != null && !rawTry && error == "invalid_auth") {
+                    logger.warn("Invalid auth error, retrying with raw Cookie header")
                     // if you straight copy the dCookie from the it network tab, it might not work because it is URL encoded,
                     // but the cookie function which we use to pass the cooke to the server, also encodes it,
                     // so now it is encoded two times and the server will reject it,
                     // for that reason we try again with the raw Cookie header
                     return checkToken(token, dCookie = null, rawTry = true)
                 }
-                logger.error("Failed to check token ${token.substringBeforeCount("-", 1)}: ${error ?: jsonObject}")
+                logger.error("Failed to check token ${maskSlackToken(token)}: ${error ?: jsonObject}")
                 return null
             }
             runCatching { SharedData.rawDCookie = rawTry }
             return jsonObject to response
         } catch (e: Exception) {
-            logger.error("Failed to check token ${token.substringBeforeCount("-", 1)}", e)
+            logger.error("Failed to check token ${maskSlackToken(token)}", e)
             return null
         }
     }
