@@ -201,7 +201,9 @@ object AppCommandManager {
             val text = response.bodyAsText()
             val json = SharedData.json.parseToJsonElement(text).jsonObject
             if (json["ok"]?.jsonPrimitive?.booleanOrNull != null) {
-                logger.error("Failed to fetch commands for app $appId: $text")
+                if ((json["error"] as? JsonPrimitive)?.contentOrNull != "app_not_found") {
+                    logger.warn("Failed to fetch commands for app $appId: $text")
+                }
             } else {
                 val slashCommands = json["slash_commands"]?.jsonArray
                 if (slashCommands == null) {
@@ -250,7 +252,7 @@ object AppCommandManager {
                 val text = response.bodyAsText()
                 val jsonText = featureFinderRegex.find(text)?.groupValues?.get(1)
                 if (jsonText == null) {
-                    logger.error("Failed to find JSON text in response body for $url")
+                    logger.warn("Failed to find JSON text in response body for $url")
                 } else {
                     val json = decodeHtmlEncodedJson(jsonText).jsonObject
                     val slashCommands = json["slashCommands"]?.jsonArray
