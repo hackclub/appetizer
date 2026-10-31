@@ -86,6 +86,12 @@ object App {
             AppManager.start()
         }
 
+        if (!Config.SOCKET_MODE && Config.SIGNING_SECRET.isBlank()) {
+            logger.warn("Socket Mode is disabled and no signing secret is provided")
+            logger.warn("We are unable to verify requests from Slack, please provide a signing secret")
+        }
+
+
         val server = embeddedServer(
             factory = Netty,
             port = Config.PORT,

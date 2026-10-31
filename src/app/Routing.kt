@@ -26,8 +26,8 @@ private val logger = LoggerFactory.getLogger(Routing::class.java)
 
 fun Application.configureRouting() {
     val slackSigningSecret =
-        runCatching { Config.SLACK_SIGNING_SECRET }.getOrNull()
-            ?: System.getenv("SLACK_SIGNING_SECRET")
+        runCatching { Config.SIGNING_SECRET }.getOrNull()
+            ?: System.getenv("SIGNING_SECRET")
             ?: ""
 
     routing {

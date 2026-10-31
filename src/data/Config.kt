@@ -69,8 +69,8 @@ object Config {
         description = "The Slack app token. Used in Socket Mode."
     )
 
-    val SLACK_SIGNING_SECRET: String by string(
-        key = "slack.signing.secret",
+    val SIGNING_SECRET: String by string(
+        key = "signing.secret",
         default = "",
         description = "The Slack signing secret used to verify HTTP requests from Slack."
     )
