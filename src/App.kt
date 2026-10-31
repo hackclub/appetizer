@@ -55,7 +55,10 @@ object App {
 
         SharedData.workspaces = SlackManager.getWorkspaces() ?: return@coroutineScope
 
-        logger.info("Using ${SharedData.authorizedUserId} (${SharedData.authorizedUserName}) for approving/cancel/restricting apps in following workspaces: ${SharedData.workspaces.joinToString(", ")}")
+        logger.info(
+            "Using ${SharedData.authorizedUserId} (${SharedData.authorizedUserName}) for " +
+                    "approving/cancel/restricting apps in following workspaces: ${SharedData.workspaces.joinToString(", ")}"
+        )
 
         try {
             DatabaseManager.init()
@@ -223,10 +226,16 @@ object App {
         }
         SharedData.appId = appId
 
+        runCatching { SharedData.rawDCookie = false }
+
         return@coroutineScope true
     }
 
-    private suspend fun checkToken(token: String, requiredScopes: Map<String, String>?, dCookie: String? = null): JsonObject? {
+    private suspend fun checkToken(
+        token: String,
+        requiredScopes: Map<String, String>?,
+        dCookie: String? = null
+    ): JsonObject? {
         val (jsonObject, response) = checkToken(token, dCookie = dCookie) ?: return null
         if (requiredScopes == null) return jsonObject
         val scopeHeaders = response.headers["x-oauth-scopes"]
@@ -245,27 +254,44 @@ object App {
         }
         val unnecessaryScopes = scopes.filter { it !in requiredScopes }.filter { it != "identify" }
         if (unnecessaryScopes.isNotEmpty()) {
-            logger.warn("Token ${token.substringBeforeCount("-", 1)} has unnecessary scopes: ${unnecessaryScopes.joinToString(", ")}")
+            logger.warn("Token ${token.substringBeforeCount("-", 1)} " +
+                    "has unnecessary scopes: ${unnecessaryScopes.joinToString(", ")}")
             logger.warn("Please remove unnecessary scopes from the token, to follow the least privilege principle.")
         }
         return jsonObject
     }
 
-    private suspend fun checkToken(token: String, dCookie: String?): Pair<JsonObject, HttpResponse>? {
+    private suspend fun checkToken(
+        token: String,
+        dCookie: String?,
+        rawTry: Boolean = false
+    ): Pair<JsonObject, HttpResponse>? {
         try {
             val response = SharedData.httpClient.get("https://slack.com/api/auth.test") {
                 bearerAuth(token)
                 if (dCookie != null) {
-                    cookie("d", dCookie)
+                    if (rawTry) {
+                        header("Cookie", "d=$dCookie")
+                    } else {
+                        cookie("d", dCookie)
+                    }
                 }
             }
             val text = response.bodyAsText()
             val jsonObject = SharedData.json.parseToJsonElement(text).jsonObject
             if ((jsonObject["ok"] as? JsonPrimitive)?.booleanOrNull != true) {
                 val error = (jsonObject["error"] as? JsonPrimitive)?.contentOrNull
+                if (dCookie != null && !rawTry && error == "invalid_auth") {
+                    // if you straight copy the dCookie from the it network tab, it might not work because it is URL encoded,
+                    // but the cookie function which we use to pass the cooke to the server, also encodes it,
+                    // so now it is encoded two times and the server will reject it,
+                    // for that reason we try again with the raw Cookie header
+                    return checkToken(token, dCookie = null, rawTry = true)
+                }
                 logger.error("Failed to check token ${token.substringBeforeCount("-", 1)}: ${error ?: jsonObject}")
                 return null
             }
+            runCatching { SharedData.rawDCookie = rawTry }
             return jsonObject to response
         } catch (e: Exception) {
             logger.error("Failed to check token ${token.substringBeforeCount("-", 1)}", e)

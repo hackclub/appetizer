@@ -31,7 +31,8 @@ import kotlin.time.Duration.Companion.hours
 object AppCommandManager {
     private val logger = LoggerFactory.getLogger(AppCommandManager::class.java)
 
-    private val featureFinderRegex = Regex("""<div\b(?=[^>]*\bdata-automount-component\s*=\s*["']AppDirectoryFeatures["'])(?=[^>]*\bdata-automount-props\s*=\s*["']([^"']*)["'])[^>]*>""".trimIndent())
+    private val featureFinderRegex =
+        Regex("""<div\b(?=[^>]*\bdata-automount-component\s*=\s*["']AppDirectoryFeatures["'])(?=[^>]*\bdata-automount-props\s*=\s*["']([^"']*)["'])[^>]*>""".trimIndent())
 
     private const val CORE = "CORE"
 
@@ -64,7 +65,11 @@ object AppCommandManager {
             try {
                 val response = SharedData.httpClient.get("https://slack.com/api/client.appCommands") {
                     parameter("token", Config.SLACK_CLIENT_TOKEN)
-                    cookie("d", Config.SLACK_SESSION_COOKIE)
+                    if (SharedData.rawDCookie) {
+                        header("Cookie", "d=${Config.SLACK_SESSION_COOKIE}")
+                    } else {
+                        cookie("d", Config.SLACK_SESSION_COOKIE)
+                    }
                 }
 
                 // doing it this way because the response from slack it currently around 4 MB and there it no way to limit it
@@ -164,7 +169,11 @@ object AppCommandManager {
         // 1. the simple one
         try {
             val response = SharedData.httpClient.get("https://slack.com/api/apps.about.info") {
-                cookie("d", Config.SLACK_SESSION_COOKIE)
+                if (SharedData.rawDCookie) {
+                    header("Cookie", "d=${Config.SLACK_SESSION_COOKIE}")
+                } else {
+                    cookie("d", Config.SLACK_SESSION_COOKIE)
+                }
                 parameter("token", Config.SLACK_CLIENT_TOKEN)
                 parameter("app_id", appId)
             }
@@ -207,7 +216,11 @@ object AppCommandManager {
         val url = "https://slack.com/marketplace/$appId"
         try {
             val response = SharedData.httpClient.get(url) {
-                cookie("d", Config.SLACK_SESSION_COOKIE)
+                if (SharedData.rawDCookie) {
+                    header("Cookie", "d=${Config.SLACK_SESSION_COOKIE}")
+                } else {
+                    cookie("d", Config.SLACK_SESSION_COOKIE)
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -227,7 +240,9 @@ object AppCommandManager {
                             try {
                                 val jsonObject = element.jsonObject
                                 SlashCommand(
-                                    name = jsonObject["name"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("Missing name field in slash command JSON"),
+                                    name = jsonObject["name"]?.jsonPrimitive?.content ?: throw IllegalArgumentException(
+                                        "Missing name field in slash command JSON"
+                                    ),
                                     description = jsonObject["desc"]?.jsonPrimitive?.content ?: "",
                                     usageHint = jsonObject["usage"]?.jsonPrimitive?.content ?: ""
                                 )

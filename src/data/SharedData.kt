@@ -32,4 +32,6 @@ object SharedData {
     var authorizedUserName: String by oneTimeSetProperty()
     var workspaces: List<String> by oneTimeSetProperty()
     var validClientTokens: Boolean by oneTimeSetProperty()
+
+    var rawDCookie: Boolean by oneTimeSetProperty()
 }
