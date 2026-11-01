@@ -83,9 +83,9 @@ object SlackInteractionHandler {
 
             when (actionId) {
                 "review_approve" -> handleReviewApprove(userId, requestId, stateId, triggerId)
-                "review_deny" -> handleReviewDeny(userId, value, stateId, triggerId)
-                "review_restrict" -> handleReviewRestrict(userId, value, stateId, triggerId)
-                "review_undo" -> handleReviewUndo(userId, value, stateId, triggerId)
+                "review_deny" -> handleReviewDeny(userId, requestId, stateId, triggerId)
+                "review_restrict" -> handleReviewRestrict(userId, requestId, stateId, triggerId)
+                "review_undo" -> handleReviewUndo(userId, requestId, stateId, triggerId)
                 "user_check_verification" -> handleUserCheckVerification(userId, value)
                 "user_request_review" -> handleUserRequestReview(userId, value)
                 "user_withdraw_request" -> handleUserWithdrawRequest(userId, value)
@@ -273,10 +273,12 @@ object SlackInteractionHandler {
             openUnauthorizedError(triggerId)
             return
         }
+        logger.info("Received request to undo resolution for request $requestId")
 
         val record = InstallRequestRepository.getRequest(requestId) ?: return
 
         if (record.resolution == RequestDecision.WITHDRAWN) {
+            logger.warn("Cannot undo resolution for request $requestId: request is withdrawn")
             return
         }
 
