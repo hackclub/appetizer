@@ -18,6 +18,7 @@ import com.google.gson.JsonObject
 import com.slack.api.model.kotlin_extension.block.ActionsBlockBuilder
 import com.slack.api.model.kotlin_extension.block.dsl.LayoutBlockDsl
 import com.slack.api.model.kotlin_extension.block.element.ListStyle
+import com.slack.api.model.kotlin_extension.block.element.RichTextSectionElementBuilder
 import io.ktor.http.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -75,15 +76,17 @@ object SlackWorkflowService {
         }
     }
 
-    private fun formatReason(reason: RequestDecisionReason?, resolutionMessage: String?, resolvedBy: String?): String {
+    private fun RichTextSectionElementBuilder.addReason(reason: RequestDecisionReason?, resolutionMessage: String?, resolvedBy: String?) {
         if (resolvedBy == "THIRD_PARTY") {
-            return "The request was resolved by a third party"
+            return text("The request was resolved by a third party")
         }
         if (resolvedBy != null) {
-            val msg = if (!resolutionMessage.isNullOrBlank()) " ($resolutionMessage)" else ""
-            return "Resolved by <@$resolvedBy>$msg"
+            text("Resolved by ")
+            user(resolvedBy)
+            if (!resolutionMessage.isNullOrBlank()) text(" ($resolutionMessage)")
+            return
         }
-        return when (reason) {
+        val reason = when (reason) {
             RequestDecisionReason.USER_VERIFIED -> "Verified user with allowed scopes"
             RequestDecisionReason.USER_UNVERIFIED -> "User is not verified"
             RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES -> "Unverified user with explicitly allowed scopes"
@@ -101,6 +104,7 @@ object SlackWorkflowService {
             RequestDecisionReason.THIRD_PARTY -> "The request was resolved by a third party"
             null -> "None"
         }
+        text(reason)
     }
 
     suspend fun postInitialReviewMessage(
@@ -111,7 +115,6 @@ object SlackWorkflowService {
         stateId: String
     ): String? {
         val appUrl = request.app.appHomepageUrl.ifBlank { request.app.appDirectoryUrl }
-        val reasonText = formatReason(decision.reason, null, null)
         val buttonValue = "${request.id}:$stateId"
 
         val messageTs = SlackManager.sendMessage(Config.SLACK_CHANNEL_REVIEW) {
@@ -133,7 +136,7 @@ object SlackWorkflowService {
                     text(" ")
                     tag(statusLabel(decision.status, null), statusColor(decision.status, null))
                     text("\nReason: ", style = TextStyle(bold = true))
-                    text(reasonText)
+                    addReason(decision.reason, null, null)
                 }
             }
             actions {
@@ -420,7 +423,6 @@ object SlackWorkflowService {
     ) {
         val reviewTs = record.reviewMessageTs ?: return
         val appUrl = record.appUrl
-        val reasonText = formatReason(reason, resolutionMessage, resolvedBy)
 
         SlackManager.updateMessage(Config.SLACK_CHANNEL_REVIEW, reviewTs) {
             header {
@@ -447,9 +449,8 @@ object SlackWorkflowService {
                         tag(statusLabel(status, resolution), statusColor(status, resolution))
                     }
                     text("\nReason: ", style = TextStyle(bold = true))
-                    text(reasonText)
+                    addReason(reason, resolutionMessage, resolvedBy)
                 }
-//                markdownText("*App:* $appLink (`${record.appId}`)\n*User:* <@${record.userId}>\n*Status:* $statusText\n*Reason:* $reasonText")
             }
             actions {
                 reviewButtons(
@@ -469,11 +470,23 @@ object SlackWorkflowService {
         reason: String? = null,
         actorName: String? = null
     ) {
-        val actor = if (actorId != null) "<@$actorId>" else (actorName ?: "System")
-        val reasonStr = if (!reason.isNullOrBlank()) "\n*Reason / Note:* $reason" else ""
         SlackManager.sendMessage(Config.SLACK_CHANNEL_REVIEW, reviewMessageTs) {
-            section {
-                markdownText("$actor $actionText$reasonStr")
+            richText {
+                richTextSection {
+                    if (actorId != null) {
+                        user(actorId)
+                    } else {
+                        text(actorName ?: "System", style = TextStyle(bold = true))
+                    }
+                    if (actionText.isNotEmpty()) {
+                        text(" ")
+                        text(actionText)
+                    }
+                    if (!reason.isNullOrBlank()) {
+                        text("\nReason / Note: ", style = TextStyle(bold = true))
+                        text(reason)
+                    }
+                }
             }
         }
     }
@@ -1097,12 +1110,25 @@ object SlackWorkflowService {
             } else {
                 for (req in userRequests) {
                     val appUrl = req.appUrl
-                    val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${req.appName}>" else req.appName
-                    val statusText = "${statusEmoji(req.status)} *${statusLabel(req.status, req.resolution)}*"
-                    val reason = formatReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)
 
-                    section {
-                        markdownText("*App:* $appLink (`${req.appId}`)\n*Status:* $statusText\n*Details:* $reason")
+                    richText {
+                        richTextSection {
+                            text("App: ", style = TextStyle(bold = true))
+                            if (appUrl != null) {
+                                link(appUrl, text = req.appName)
+                            } else {
+                                text(req.appName)
+                            }
+                            text("(")
+                            text(req.appId, style = TextStyle(code = true))
+                            text(")\n")
+                            text("Status: ", style = TextStyle(bold = true))
+                            emoji(statusEmoji(req.status))
+                            text(" ")
+                            tag(statusLabel(req.status, req.resolution), statusColor(req.status, req.resolution))
+                            text("\nDetails: ", style = TextStyle(bold = true))
+                            addReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)
+                        }
                     }
 
                     if (req.status == RequestStatus.PENDING_REVIEW || (req.status == RequestStatus.DENIED && req.resolution == null)) {
@@ -1937,30 +1963,44 @@ object SlackWorkflowService {
 
     private fun LayoutBlockDsl.reviewEntry(req: InstallRequestRecord, showButtons: Boolean = true) {
         val appUrl = req.appUrl
-        val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${req.appName}>" else req.appName
-        val statusText = "${statusEmoji(req.status)} *${statusLabel(req.status, req.resolution)}*"
-        val reviewLink = if (!req.reviewMessageTs.isNullOrBlank()) {
-            " - <https://slack.com/archives/${Config.SLACK_CHANNEL_REVIEW}/p${
-                req.reviewMessageTs.replace(
-                    ".",
-                    ""
-                )
-            }|View Thread>"
-        } else ""
 
-        section {
-            markdownText(
-                "*App:* $appLink (`${req.appId}`)\n*User:* <@${req.userId}>\n" +
-                        "*Status:* $statusText$reviewLink\n" +
-                        "*Reason:* ${formatReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)}"
-            )
+        richText {
+            richTextSection {
+                text("App: ", style = TextStyle(bold = true))
+                if (appUrl != null) {
+                    link(appUrl, req.appName)
+                } else {
+                    text(req.appName)
+                }
+                text(" (")
+                text(req.appId, style = TextStyle(code = true))
+                text(")\n")
+                text("User: ", style = TextStyle(bold = true))
+                user(req.userId)
+                text("\nStatus: ", style = TextStyle(bold = true))
+                emoji(statusEmoji(req.status))
+                text(" ")
+                tag(statusLabel(req.status, req.resolution), statusColor(req.status, req.resolution))
+                if (!req.reviewMessageTs.isNullOrBlank()) {
+                    text(" - ")
+                    link(
+                        "https://slack.com/archives/${Config.SLACK_CHANNEL_REVIEW}" +
+                                "/p${req.reviewMessageTs.replace(".", "")}",
+                        "View Thread"
+                    )
+                }
+                text("\nReason: ", style = TextStyle(bold = true))
+                addReason(req.automaticDecisionReason, req.resolutionMessage, req.resolvedBy)
+            }
         }
         if (showButtons) {
             actions {
-                reviewButtons(req.stateId?.let { "${req.requestId}:$it" } ?: req.requestId,
-                    req.status,
-                    req.resolution,
-                    null)
+                reviewButtons(
+                    buttonValue = req.stateId?.let { "${req.requestId}:$it" } ?: req.requestId,
+                    status = req.status,
+                    resolution = req.resolution,
+                    reason = null
+                )
             }
         }
         divider()
