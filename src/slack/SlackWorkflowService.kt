@@ -48,10 +48,20 @@ object SlackWorkflowService {
         "true".equals(SettingsManager["scope_info_screen"], ignoreCase = true)
 
     private fun statusEmoji(status: RequestStatus): String = when (status) {
-        RequestStatus.PENDING_REVIEW -> ":hourglass_flowing_sand:"
-        RequestStatus.APPROVED -> ":white_check_mark:"
-        RequestStatus.DENIED -> ":no_entry_sign:"
-        RequestStatus.WITHDRAWN -> ":outbox_tray:"
+        RequestStatus.PENDING_REVIEW -> "hourglass_flowing_sand"
+        RequestStatus.APPROVED -> "white_check_mark"
+        RequestStatus.DENIED -> "no_entry_sign"
+        RequestStatus.WITHDRAWN -> "outbox_tray"
+    }
+
+    private fun statusColor(status: RequestStatus, resolution: RequestDecision?): TagColor {
+        if (resolution == RequestDecision.UNDONE) return TagColor.PURPLE
+        return when (status) {
+            RequestStatus.PENDING_REVIEW -> TagColor.YELLOW
+            RequestStatus.APPROVED -> TagColor.GREEN
+            RequestStatus.DENIED -> TagColor.RED
+            RequestStatus.WITHDRAWN -> TagColor.BLUE
+        }
     }
 
     private fun statusLabel(status: RequestStatus, resolution: RequestDecision?): String {
@@ -101,8 +111,6 @@ object SlackWorkflowService {
         stateId: String
     ): String? {
         val appUrl = request.app.appHomepageUrl.ifBlank { request.app.appDirectoryUrl }
-        val appLink = if (appUrl.isNotBlank()) "<$appUrl|${request.app.name}>" else request.app.name
-        val statusText = "${statusEmoji(decision.status)} *${statusLabel(decision.status, null)}*"
         val reasonText = formatReason(decision.reason, null, null)
         val buttonValue = "${request.id}:$stateId"
 
@@ -110,8 +118,23 @@ object SlackWorkflowService {
             header {
                 text("App Installation Request", true)
             }
-            section {
-                markdownText("*App:* $appLink (`${request.app.id}`)\n*User:* <@${request.user.id}>\n*Status:* $statusText\n*Reason:* $reasonText")
+            richText {
+                richTextSection {
+                    text("App: ", style = TextStyle(bold = true))
+                    if (appUrl.isNotBlank()) {
+                        link(appUrl, request.app.name)
+                    } else {
+                        text(request.app.name)
+                    }
+                    text("\nUser: ", style = TextStyle(bold = true))
+                    user(request.user.id)
+                    text("\nStatus: ", style = TextStyle(bold = true))
+                    emoji(statusEmoji(decision.status))
+                    text(" ")
+                    tag(statusLabel(decision.status, null), statusColor(decision.status, null))
+                    text("\nReason: ", style = TextStyle(bold = true))
+                    text(reasonText)
+                }
             }
             actions {
                 if (decision.status == RequestStatus.APPROVED) {
@@ -168,88 +191,6 @@ object SlackWorkflowService {
                 }
             }
         } ?: return null
-
-        val scopesText = if (request.scopes.isEmpty()) {
-            "None"
-        } else {
-            val hasNoFinalResolutions = decisionContext.previousRequests.none { it.status.final }
-            request.scopes.joinToString("\n") { s ->
-                val sens = if (s.isSensitive) " (sensitive)" else ""
-                val opt = if (s.isOptional) " (optional)" else ""
-                val previousResolutionText = if (hasNoFinalResolutions) {
-                    ""
-                } else {
-                    val previousResolution = decisionContext.previousRequests.findLast {
-                        it.status.final && it.scopes.any { scope -> scope.name == s.name && scope.tokenType == s.tokenType }
-                    }?.status
-                    when (previousResolution) {
-                        RequestStatus.APPROVED -> " (approved)"
-                        RequestStatus.DENIED -> " (denied)"
-                        else -> " (new)"
-                    }
-                }
-                "$BULLET `${s.name}` [${s.tokenType}]$sens$opt$previousResolutionText"
-            }
-        }
-
-        val commandText = if (decisionContext.commands.isEmpty()) {
-            "None"
-        } else {
-            decisionContext.commands.joinToString("\n") { cmd ->
-                val desc = cmd.description.takeIf { it.isNotBlank() }?.let { " - $it" } ?: ""
-                val owner = decision.relevantCommands[cmd.name]?.let { " (Owned by $it)" } ?: ""
-                "$BULLET `${cmd.name}`$desc$owner"
-            }
-        }
-
-        val unfurlDomainsText = if (decisionContext.unfurlDomains.isEmpty()) {
-            "None"
-        } else {
-            decisionContext.unfurlDomains.joinToString("\n") { domain ->
-                "$BULLET `$domain`"
-            }
-        }
-
-        // while we theoretically could have used the rich text builder, it is just easier this way
-        val detailsText = buildString {
-            appendLine("*Request ID:* `${request.id}`")
-            appendLine("*User:* <@${request.user.id}> (Verified: $isUserVerified, Collaborator: ${request.isUserAppCollaborator})")
-            if (request.team != null) appendLine("*Team:* `${request.team.id}` (${request.team.name})")
-            if (request.enterprise != null) appendLine("*Enterprise:* `${request.enterprise.id}` (${request.enterprise.name})")
-            if (!request.message.isNullOrBlank()) appendLine("*User Message:* ${request.message}")
-
-            appendLine("\n*App Details:*")
-            appendLine("$BULLET ID: `${request.app.id}`")
-            appendLine("$BULLET Name: ${request.app.name}")
-            appendLine("$BULLET Developer Type: ${request.app.developerType}")
-            if (request.app.description.isNotBlank()) appendLine("$BULLET Description: ${request.app.description}")
-
-            appendLine("\n*Requested Scopes:*\n$scopesText")
-
-            append("\n*Slash Commands:*")
-            if (commandText == "None") {
-                append(" None")
-            } else {
-                appendLine("\n$commandText")
-            }
-
-            append("\n*Unfurl Domains:*")
-            if (unfurlDomainsText == "None") {
-                append(" None")
-            } else {
-                appendLine("\n$unfurlDomainsText")
-            }
-
-            appendLine("\n*Initial Evaluation:*")
-            appendLine("$BULLET Status: ${decision.status}")
-            appendLine("$BULLET Reason: ${decision.reason}")
-            if (decision.explanation.isNotBlank()) appendLine("$BULLET Explanation: ${decision.explanation}")
-            if (decision.relevantRestrictedScopes.isNotEmpty()) {
-                append("$BULLET Relevant Scopes: `")
-                append(decision.relevantRestrictedScopes.joinToString(", "))
-                appendLine("`")
-            }
-        }
 
         SlackManager.sendMessage(Config.SLACK_CHANNEL_REVIEW, messageTs) {
             richText {
@@ -333,7 +274,6 @@ object SlackWorkflowService {
                         if (request.app.description.isNotBlank()) richTextSection {
                             text("Description: ", style = TextStyle(bold = true))
                             text(request.app.description)
-//                            appendLine("$BULLET Description: ${request.app.description}")
                         }
                     }
                 }
@@ -480,18 +420,36 @@ object SlackWorkflowService {
     ) {
         val reviewTs = record.reviewMessageTs ?: return
         val appUrl = record.appUrl
-        val appLink = if (!appUrl.isNullOrBlank()) "<$appUrl|${record.appName}>" else record.appName
-        val statusText = if (resolution == RequestDecision.WITHDRAWN && reason == RequestDecisionReason.THIRD_PARTY)
-            ":question: *Resolved by someone*"
-        else "${statusEmoji(status)} *${statusLabel(status, resolution)}*"
         val reasonText = formatReason(reason, resolutionMessage, resolvedBy)
 
         SlackManager.updateMessage(Config.SLACK_CHANNEL_REVIEW, reviewTs) {
             header {
                 text("App Installation Request", true)
             }
-            section {
-                markdownText("*App:* $appLink (`${record.appId}`)\n*User:* <@${record.userId}>\n*Status:* $statusText\n*Reason:* $reasonText")
+            richText {
+                richTextSection {
+                    text("App: ", style = TextStyle(bold = true))
+                    if (!appUrl.isNullOrBlank()) {
+                        link(appUrl, record.appName)
+                    } else {
+                        text(record.appName)
+                    }
+                    text("\nUser: ", style = TextStyle(bold = true))
+                    user(record.userId)
+                    text("\nStatus: ", style = TextStyle(bold = true))
+                    if (resolution == RequestDecision.WITHDRAWN && reason == RequestDecisionReason.THIRD_PARTY) {
+                        emoji("question")
+                        text(" ")
+                        tag("Resolved by someone", TagColor.BROWN)
+                    } else {
+                        emoji(statusEmoji(status))
+                        text(" ")
+                        tag(statusLabel(status, resolution), statusColor(status, resolution))
+                    }
+                    text("\nReason: ", style = TextStyle(bold = true))
+                    text(reasonText)
+                }
+//                markdownText("*App:* $appLink (`${record.appId}`)\n*User:* <@${record.userId}>\n*Status:* $statusText\n*Reason:* $reasonText")
             }
             actions {
                 reviewButtons(
