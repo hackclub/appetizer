@@ -12,7 +12,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.associate
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.toSet
 import kotlinx.io.buffered
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -33,6 +32,9 @@ object AppCommandManager {
 
     private val featureFinderRegex =
         Regex("""<div\b(?=[^>]*\bdata-automount-component\s*=\s*["']AppDirectoryFeatures["'])(?=[^>]*\bdata-automount-props\s*=\s*["']([^"']*)["'])[^>]*>""".trimIndent())
+
+    private val authorizationsFinderRegex =
+        Regex("""<div\b(?=[^>]*\bdata-automount-component\s*=\s*["']AppDirectoryAuthorizations["'])(?=[^>]*\bdata-automount-props\s*=\s*["']([^"']*)["'])[^>]*>""")
 
     private const val CORE = "CORE"
 
@@ -90,7 +92,7 @@ object AppCommandManager {
             } catch (e: Exception) {
                 logger.error("Failed to fetch commands", e)
             }
-            delay(30.minutes)
+            delay(1.minutes)
         }
     }
 
@@ -143,31 +145,217 @@ object AppCommandManager {
         }
         val activeCommandNames: Set<String> = normalizedCommands.mapTo(mutableSetOf()) { it.name }
 
-        DatabaseManager.transaction {
-            val currentlyActiveCommands =
-                AppCommandsTable.select(AppCommandsTable.command)
-                    .where { AppCommandsTable.active eq true }
-                    .map { it[AppCommandsTable.command] }
-                    .toSet()
+        val overriddenCommands: MutableList<Triple<String, String, String>> = mutableListOf()
 
-            val commandsToDeactivate = currentlyActiveCommands - activeCommandNames
-            if (commandsToDeactivate.isNotEmpty()) {
-                AppCommandsTable.update({
-                    (AppCommandsTable.command inList commandsToDeactivate) and (AppCommandsTable.active eq true)
-                }) {
-                    it[active] = false
+        try {
+            DatabaseManager.transaction {
+                val currentlyActiveCommands =
+                    AppCommandsTable.select(AppCommandsTable.command)
+                        .where { AppCommandsTable.active eq true }
+                        .associate {
+                            it[AppCommandsTable.command] to Unit
+                        }.keys
+
+                val commandsToDeactivate = currentlyActiveCommands - activeCommandNames
+
+                // check for commands that changed ownership
+                val existingOwners = if (activeCommandNames.isNotEmpty()) {
+                    AppCommandsTable.select(AppCommandsTable.command, AppCommandsTable.app)
+                        .where {
+                            (AppCommandsTable.command inList activeCommandNames) and
+                                    (AppCommandsTable.active eq true)
+                        }
+                        .associate {
+                            it[AppCommandsTable.command] to it[AppCommandsTable.app]
+                        }
+                } else {
+                    emptyMap()
                 }
-                logger.info("Deactivated ${commandsToDeactivate.size} commands")
+
+                normalizedCommands.forEach { command ->
+                    val previousApp = existingOwners[command.name]
+                    val newApp = command.app ?: CORE
+
+                    if (previousApp != null && previousApp != newApp) {
+                        overriddenCommands.add(Triple(command.name, newApp, previousApp))
+                    }
+                }
+
+                if (commandsToDeactivate.isNotEmpty()) {
+                    AppCommandsTable.update({
+                        (AppCommandsTable.command inList commandsToDeactivate) and
+                                (AppCommandsTable.active eq true)
+                    }) {
+                        it[active] = false
+                    }
+                    logger.info("Deactivated ${commandsToDeactivate.size} commands")
+                }
+
+                AppCommandsTable.batchUpsert(
+                    normalizedCommands,
+                    shouldReturnGeneratedValues = false
+                ) {
+                    this[AppCommandsTable.command] = it.name
+                    this[AppCommandsTable.app] = it.app ?: CORE
+                    this[AppCommandsTable.active] = true
+                }
+
+                logger.info("Synchronized ${normalizedCommands.size} active commands")
             }
-            AppCommandsTable.batchUpsert(
-                normalizedCommands,
-                shouldReturnGeneratedValues = false
-            ) {
-                this[AppCommandsTable.command] = it.name
-                this[AppCommandsTable.app] = it.app ?: CORE
-                this[AppCommandsTable.active] = true
+        } catch (e: Exception) {
+            logger.error("Failed to synchronize commands", e)
+        }
+
+        try {
+            onCommandOverrides(overriddenCommands)
+        } catch (e: Exception) {
+            logger.error("Failed to notify about command overrides", e)
+        }
+    }
+
+    private suspend fun onCommandOverrides(overrides: List<Triple<String, String, String>>) {
+        data class AppInfo(
+            val owner: String?,
+            val botUser: String?
+        )
+
+        val appInfoCache = mutableMapOf<String, AppInfo>()
+
+        val ownerRegex = Regex("""href="/team/([UW][A-Z0-9]+)"""")
+
+        suspend fun getAppInfo(appId: String): AppInfo {
+            return appInfoCache.getOrPut(appId) {
+                try {
+                    val response = SharedData.httpClient.get("https://slack.com/marketplace/$appId") {
+                        if (SharedData.rawDCookie) {
+                            header("Cookie", "d=${Config.SLACK_SESSION_COOKIE}")
+                        } else {
+                            cookie("d", Config.SLACK_SESSION_COOKIE)
+                        }
+                    }
+
+                    val site = response.bodyAsText()
+
+                    val owner = ownerRegex.find(site)?.groupValues?.get(1)
+
+                    if (owner == null) {
+                        logger.warn("Failed to fetch app owner (appId = $appId)")
+                    }
+
+                    val encodedProps = authorizationsFinderRegex.find(site)?.groupValues?.get(1)
+
+                    val botUser = if (encodedProps != null) {
+                        try {
+                            val props = decodeHtmlEncodedJson(encodedProps).jsonObject
+                            val authorizations = props["authorizations"]?.jsonArray
+
+                            authorizations
+                                ?.firstOrNull { element ->
+                                    element.jsonObject["fullDescription"]
+                                        ?.jsonPrimitive
+                                        ?.contentOrNull
+                                        ?.contains("Send messages as @") == true
+                                }
+                                ?.jsonObject
+                                ?.get("encodedUserLink")
+                                ?.jsonPrimitive
+                                ?.contentOrNull
+                        } catch (e: Exception) {
+                            logger.error("Failed to parse app authorizations (appId = $appId)", e)
+                            null
+                        }
+                    } else {
+                        logger.warn("Failed to find AppDirectoryAuthorizations for app $appId")
+                        null
+                    }
+
+                    if (botUser == null) {
+                        logger.warn("Failed to fetch bot user (appId = $appId)")
+                    }
+
+                    AppInfo(owner = owner, botUser = botUser)
+                } catch (e: Exception) {
+                    logger.error("Failed to fetch app information (appId = $appId)", e)
+                    AppInfo(owner = null, botUser = null)
+                }
             }
-            logger.info("Synchronized ${normalizedCommands.size} active commands")
+        }
+
+        for ((command, newApp, previousApp) in overrides) {
+            try {
+                val newAppInfo = getAppInfo(newApp)
+                val previousAppInfo = getAppInfo(previousApp)
+
+                val newAppOwner = newAppInfo.owner ?: continue
+                val previousAppOwner = previousAppInfo.owner ?: continue
+                val newBotUser = newAppInfo.botUser ?: continue
+                val previousBotUser = previousAppInfo.botUser ?: continue
+
+                onCommandOverride(
+                    command = command,
+                    newAppId = newApp,
+                    previousAppId = previousApp,
+                    newAppOwner = newAppOwner,
+                    previousAppOwner = previousAppOwner,
+                    newBotUser = newBotUser,
+                    previousBotUser = previousBotUser
+                )
+            } catch (e: Exception) {
+                logger.error(
+                    "Failed to process command override (command = $command, newApp = $newApp, previousApp = $previousApp)",
+                    e
+                )
+            }
+        }
+    }
+
+    private suspend fun onCommandOverride(
+        command: String,
+        newAppId: String,
+        previousAppId: String,
+        newAppOwner: String,
+        previousAppOwner: String,
+        newBotUser: String,
+        previousBotUser: String
+    ) {
+        logger.info(
+            "Command override detected: command = $command, " +
+                    "newApp = $newAppId, previousApp = $previousAppId, " +
+                    "newAppOwner = $newAppOwner, previousAppOwner = $previousAppOwner, " +
+                    "newBotUser = $newBotUser, previousBotUser = $previousBotUser"
+        )
+
+        SlackManager.sendDm(previousAppOwner) {
+            section {
+                markdownText(
+                    """
+                *Your app has lost ownership of a slash command*
+
+                Your app <@$previousBotUser> (<https://slack.com/marketplace/$previousAppId|$previousAppId>) previously registered the slash command `$command`.
+
+                However, another app <@$newBotUser> (<https://slack.com/marketplace/$newAppId|$newAppId>) has now registered the same command.
+
+                *What does this mean?*
+
+                - Your app will no longer receive executions of `/$command`.
+                - All future executions of this command will be handled by the new app.
+                - Existing users of your app may not notice this change immediately. They might continue using `/$command` without realizing that they are now interacting with a completely different app.
+
+                *What should you do?*
+
+                We recommend contacting the owner of the new app (<@$newAppOwner>) to clarify whether this change was intentional.
+
+                If this was an intentional change, you can safely ignore this message.
+
+                However, if you believe that another app has deliberately taken over your command without authorization, please contact <@U07K4TS9HQE>, so the situation can be investigated.
+                """.trimIndent()
+                )
+            }
+            context {
+                markdownText(
+                    "_This is an automated notification from App Approver._"
+                )
+            }
         }
     }
 
