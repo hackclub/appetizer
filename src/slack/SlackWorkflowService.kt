@@ -1,6 +1,7 @@
 package com.fantamomo.slack.approver.slack
 
 import com.fantamomo.slack.approver.data.Config
+import com.fantamomo.slack.approver.data.Constants
 import com.fantamomo.slack.approver.data.Constants.BULLET
 import com.fantamomo.slack.approver.data.Constants.MARKETPLACE_URL
 import com.fantamomo.slack.approver.decision.DecisionContext
@@ -9,10 +10,14 @@ import com.fantamomo.slack.approver.manager.SettingsManager
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
+import com.fantamomo.slack.approver.utils.blockkit.TagColor
+import com.fantamomo.slack.approver.utils.blockkit.TextStyle
+import com.fantamomo.slack.approver.utils.blockkit.tag
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.slack.api.model.kotlin_extension.block.ActionsBlockBuilder
 import com.slack.api.model.kotlin_extension.block.dsl.LayoutBlockDsl
+import com.slack.api.model.kotlin_extension.block.element.ListStyle
 import io.ktor.http.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -39,7 +44,8 @@ object SlackWorkflowService {
 
     private val scopeTests = ConcurrentHashMap<String, ScopeTestInput>()
 
-    private fun isScopeInfoScreenEnabled(): Boolean = "true".equals(SettingsManager["scope_info_screen"], ignoreCase = true)
+    private fun isScopeInfoScreenEnabled(): Boolean =
+        "true".equals(SettingsManager["scope_info_screen"], ignoreCase = true)
 
     private fun statusEmoji(status: RequestStatus): String = when (status) {
         RequestStatus.PENDING_REVIEW -> ":hourglass_flowing_sand:"
@@ -246,8 +252,218 @@ object SlackWorkflowService {
         }
 
         SlackManager.sendMessage(Config.SLACK_CHANNEL_REVIEW, messageTs) {
-            section {
-                markdownText(detailsText)
+            richText {
+                val userMessageWithNewLines = request.message?.contains('\n') == true
+                richTextSection {
+                    elements {
+                        text("Request ID: ", style = TextStyle(bold = true))
+                        text(request.id, style = TextStyle(code = true))
+                        text("\n")
+                        text("User: ", style = TextStyle(bold = true))
+                        user(request.user.id)
+                        text(" (Verified: ")
+                        tag("$isUserVerified", if (isUserVerified) TagColor.GREEN else TagColor.RED)
+                        text(", Collaborator: ")
+                        tag(
+                            "${request.isUserAppCollaborator}",
+                            if (request.isUserAppCollaborator) TagColor.GREEN else TagColor.RED
+                        )
+                        text(")\n")
+                        if (request.team != null) {
+                            text("Team: ", style = TextStyle(bold = true))
+                            text(request.team.id, style = TextStyle(code = true))
+                            text(" (")
+                            text(request.team.name)
+                            text(")\n")
+                        }
+                        if (request.enterprise != null) {
+                            text("Enterprise: ", style = TextStyle(bold = true))
+                            text(request.enterprise.id, style = TextStyle(code = true))
+                            text(" (")
+                            text(request.enterprise.name)
+                            text(")\n")
+                        }
+                        if (!request.message.isNullOrEmpty()) {
+                            text("User Message: ", style = TextStyle(bold = true))
+                            if (!userMessageWithNewLines) {
+                                text(request.message + "\n")
+                            }
+                        }
+                        if (!userMessageWithNewLines) {
+                            text("\nApp Details ", style = TextStyle(bold = true))
+                            link(MARKETPLACE_URL +request.app.id, text = "(marketplace)")
+                            text(": ", style = TextStyle(bold = true))
+                        }
+                    }
+                }
+                if (userMessageWithNewLines) {
+                    richTextQuote {
+                        text(request.message)
+                    }
+                    richTextSection {
+                        text("App Details", style = TextStyle(bold = true))
+                        text(" (")
+                        link(MARKETPLACE_URL +request.app.id, text = "marketplace")
+                        text(")")
+                        text(": ", style = TextStyle(bold = true))
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    elements {
+                        richTextSection {
+                            text("ID: ", style = TextStyle(bold = true))
+                            text(request.app.id, style = TextStyle(code = true))
+                        }
+                        richTextSection {
+                            text("Name: ", style = TextStyle(bold = true))
+                            text(request.app.name)
+                        }
+                        richTextSection {
+                            text("Developer Type: ", style = TextStyle(bold = true))
+                            val developerType = request.app.developerType
+                            val color = when (developerType.lowercase()) {
+                                "slack" -> TagColor.GREEN
+                                "internal" -> TagColor.BLUE
+                                "third_party" -> TagColor.RED
+                                else -> TagColor.BROWN
+                            }
+                            tag(developerType, color)
+                        }
+                        if (request.app.description.isNotBlank()) richTextSection {
+                            text("Description: ", style = TextStyle(bold = true))
+                            text(request.app.description)
+//                            appendLine("$BULLET Description: ${request.app.description}")
+                        }
+                    }
+                }
+                richTextSection {
+                    text("\nRequested Scopes:", style = TextStyle(bold = true))
+                    if (request.scopes.isEmpty()) {
+                        text(" None")
+                    }
+                }
+                if (request.scopes.isNotEmpty()) {
+                    richTextList {
+                        style(ListStyle.BULLET)
+                        elements {
+                            val hadPreviousFinalResolutions = decisionContext.previousRequests.any { it.status.final }
+                            for (scope in request.scopes) {
+                                richTextSection {
+                                    text(scope.name, style = TextStyle(code = true))
+                                    text(" - ${scope.tokenType}")
+                                    val attributes = mutableListOf<Pair<String, TagColor>>()
+
+                                    if (scope.isOptional) attributes.add("optional" to TagColor.BROWN)
+                                    if (hadPreviousFinalResolutions) {
+                                        val previousResolution = decisionContext.previousRequests.findLast {
+                                            it.status.final && it.scopes.any { s -> scope.name == s.name && scope.tokenType == s.tokenType }
+                                        }?.status
+                                        val statusTag = when (previousResolution) {
+                                            RequestStatus.APPROVED -> "approved" to TagColor.GREEN
+                                            RequestStatus.DENIED -> "denied" to TagColor.RED
+                                            else -> "new" to TagColor.PURPLE
+                                        }
+                                        attributes.add(statusTag)
+                                    }
+                                    // we are not using scope.isSensitive, because it set from slack and has nothing to do with our rules
+//                                    if (scope.isSensitive) attributes.add("sensitive" to TagColor.ORANGE)
+
+                                    for (attribute in attributes) {
+                                        text(" ")
+                                        tag("(${attribute.first})", attribute.second)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                richTextSection {
+                    text("\nSlash Commands:", style = TextStyle(bold = true))
+                    if (decisionContext.commands.isEmpty()) {
+                        text(" None")
+                    }
+                }
+                if (decisionContext.commands.isNotEmpty()) {
+                    richTextList {
+                        style(ListStyle.BULLET)
+                        elements {
+                            for (cmd in decisionContext.commands) {
+                                richTextSection {
+                                    text(cmd.name, style = TextStyle(code = true))
+                                    val owner = decision.relevantCommands[cmd.name]
+                                    if (!owner.isNullOrEmpty()) {
+                                        text(" (Owned by ")
+                                        text(owner, style = TextStyle(code = true))
+                                        text(")")
+                                    }
+                                    if (cmd.description.isNotEmpty()) {
+                                        text("\n${cmd.description}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                richTextSection {
+                    text("\nUnfurl Domains:", style = TextStyle(bold = true))
+                    if (decisionContext.unfurlDomains.isEmpty()) {
+                        text(" None")
+                    }
+                }
+                if (decisionContext.unfurlDomains.isNotEmpty()) {
+                    richTextList {
+                        style(ListStyle.BULLET)
+                        elements {
+                            for (domain in decisionContext.unfurlDomains) {
+                                richTextSection {
+                                    text(domain, style = TextStyle(code = true))
+                                    if (Constants.DANGEROUS_DOMAINS.any { domain.endsWith(it) }) {
+                                        text(" ")
+                                        tag("(dangerous)", color = TagColor.RED)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                richTextSection {
+                    text("\nInitial Evaluation:", style = TextStyle(bold = true))
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    elements {
+                        richTextSection {
+                            text("Status: ", style = TextStyle(bold = true))
+                            val color = when (decision.status) {
+                                RequestStatus.PENDING_REVIEW -> TagColor.YELLOW
+                                RequestStatus.APPROVED -> TagColor.GREEN
+                                RequestStatus.DENIED -> TagColor.RED
+                                RequestStatus.WITHDRAWN -> TagColor.BROWN // should be impossible, but who knows
+                            }
+                            tag(decision.status.name, color = color)
+                        }
+                        richTextSection {
+                            text("Reason: ", style = TextStyle(bold = true))
+                            text(decision.reason.name)
+                        }
+                        if (decision.explanation.isNotBlank()) {
+                            richTextSection {
+                                text("Explanation: ", style = TextStyle(bold = true))
+                                text(decision.explanation)
+                            }
+                        }
+                        if (decision.relevantRestrictedScopes.isNotEmpty()) {
+                            richTextSection {
+                                text("Restricted scopes: ", style = TextStyle(bold = true))
+                                for ((index, scope) in decision.relevantRestrictedScopes.withIndex()) {
+                                    if (index != 0) text(", ")
+                                    text(scope, style = TextStyle(code = true))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -634,7 +850,8 @@ object SlackWorkflowService {
                     }
 
                     RequestDecisionReason.SLACK_AUTOMATION -> {
-                        val status = request.resolution?.status?.lowercase()?.let { status -> SlackResolution.entries.find { it.value == status } }
+                        val status = request.resolution?.status?.lowercase()
+                            ?.let { status -> SlackResolution.entries.find { it.value == status } }
                         ":no_entry_sign: $user requested $app" + if (status != SlackResolution.CANCELLED) {
                             ", but slack automation denied it."
                         } else {
@@ -1004,7 +1221,9 @@ object SlackWorkflowService {
                             "Scopes without a matching rule are approved for verified users; unverified users need a manual review."
                 )
             }
-            val catchAll = rules.filter { it.pattern == "*" && it.scopeType == ScopeType.BOTH && it.userTarget == RuleUserTarget.ALL }.sortedByDescending { it.action }
+            val catchAll =
+                rules.filter { it.pattern == "*" && it.scopeType == ScopeType.BOTH && it.userTarget == RuleUserTarget.ALL }
+                    .sortedByDescending { it.action }
             if (catchAll.isNotEmpty()) {
                 val action = catchAll.first().action
                 section {
@@ -1022,9 +1241,11 @@ object SlackWorkflowService {
             for ((action, title, explanation) in groups) {
                 val groupRules = rules.filter { it.action == action }
                 header {
-                    text(title.removePrefix(":white_check_mark: ")
-                        .removePrefix(":hourglass_flowing_sand: ")
-                        .removePrefix(":no_entry_sign: "), true)
+                    text(
+                        title.removePrefix(":white_check_mark: ")
+                            .removePrefix(":hourglass_flowing_sand: ")
+                            .removePrefix(":no_entry_sign: "), true
+                    )
                 }
                 context {
                     markdownText(explanation)
@@ -1115,7 +1336,8 @@ object SlackWorkflowService {
     }
 
     private fun LayoutBlockDsl.adminRuleEntry(rule: ScopeRule) {
-        val title = "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
+        val title =
+            "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
         val details = "${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)} $BULLET #${rule.id}"
         val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
 
@@ -1171,7 +1393,11 @@ object SlackWorkflowService {
 
     private fun inactiveReason(rule: ScopeRule, scope: String, tokenType: String, verified: Boolean): String = when {
         !rule.enabled -> "rule is disabled"
-        rule.scopeType == ScopeType.USER && !tokenType.equals("user", ignoreCase = true) -> "only applies to user scopes"
+        rule.scopeType == ScopeType.USER && !tokenType.equals(
+            "user",
+            ignoreCase = true
+        ) -> "only applies to user scopes"
+
         rule.scopeType == ScopeType.BOT && !tokenType.equals("bot", ignoreCase = true) -> "only applies to bot scopes"
         rule.userTarget == RuleUserTarget.VERIFIED && !verified -> "only applies to verified users"
         rule.userTarget == RuleUserTarget.UNVERIFIED && verified -> "only applies to unverified users"
@@ -1180,7 +1406,11 @@ object SlackWorkflowService {
     }
 
     private fun ruleSummary(rule: ScopeRule): String =
-        "#${rule.id} `${rule.pattern}` $BULLET ${actionLabel(rule.action)} $BULLET ${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)}"
+        "#${rule.id} `${rule.pattern}` $BULLET ${actionLabel(rule.action)} $BULLET ${targetLabel(rule.userTarget)} $BULLET ${
+            typeLabel(
+                rule.scopeType
+            )
+        }"
 
     private fun LayoutBlockDsl.scopeTestPanel(test: ScopeTestInput, rules: List<ScopeRule>) {
         val (winner, evaluations) = evaluateScope(rules, test.scope, test.tokenType, test.verified)

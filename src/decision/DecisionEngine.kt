@@ -67,7 +67,7 @@ object DecisionEngine {
             return DecisionResult(
                 status = RequestStatus.DENIED,
                 reason = RequestDecisionReason.COMMAND_ALREADY_IN_USE,
-                explanation = "One or more commands are already in use by another request.",
+                explanation = "One or more commands are already in use by another app.",
                 relevantCommands = commandsInUse
             )
         }
