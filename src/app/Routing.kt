@@ -94,7 +94,7 @@ private suspend fun handleSlackEndpoint(
 
     if (contentType.match(ContentType.Application.FormUrlEncoded)) {
         val params = try {
-            rawBody.parseUrlEncodedParameters()
+            rawBody.parseUrlEncodedParameters(plusIsSpace = true)
         } catch (e: Exception) {
             logger.warn("Could not parse Slack form body", e)
             call.respond(
