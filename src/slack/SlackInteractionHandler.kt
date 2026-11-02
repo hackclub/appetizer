@@ -337,9 +337,13 @@ object SlackInteractionHandler {
     }
 
     private suspend fun handleViewSubmission(json: JsonObject) {
-        logger.info("Handling view submission: $json")
         val userObj = json["user"]?.jsonObject
-        val userId = userObj?.get("id")?.jsonPrimitive?.content ?: return
+        val userId = userObj?.get("id")?.jsonPrimitive?.contentOrNull
+        if (userId == null) {
+            logger.warn("Missing user id in view submission: $json")
+            return
+        }
+        logger.info("Handling view submission from user $userId")
         val triggerId = json["trigger_id"]?.jsonPrimitive?.contentOrNull
         if (triggerId == null) {
             logger.warn("Missing trigger_id in view submission: $json")
