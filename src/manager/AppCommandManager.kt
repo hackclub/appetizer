@@ -187,6 +187,8 @@ object AppCommandManager {
         // so I dont know how to handle this
         // TODO: figure this out
 
+        var firstTry: JsonObject? = null
+
         // 1. the simple one
         try {
             val response = SharedData.httpClient.get("https://slack.com/api/apps.about.info") {
@@ -202,7 +204,8 @@ object AppCommandManager {
             val json = SharedData.json.parseToJsonElement(text).jsonObject
             if (json["ok"]?.jsonPrimitive?.booleanOrNull != null) {
                 if ((json["error"] as? JsonPrimitive)?.contentOrNull != "app_not_found") {
-                    logger.warn("Failed to fetch commands for app $appId: $text")
+                    firstTry = json
+//                    logger.warn("Failed to fetch commands for app $appId: $text")
                 }
             } else {
                 val slashCommands = json["slash_commands"]?.jsonArray
@@ -236,6 +239,8 @@ object AppCommandManager {
         // ok, first shoot missed,
         // now the second try
 
+        var secondTry: JsonObject? = null
+
         val url = "https://slack.com/marketplace/$appId"
         try {
             val response = SharedData.httpClient.get(url) {
@@ -257,7 +262,8 @@ object AppCommandManager {
                     val json = decodeHtmlEncodedJson(jsonText).jsonObject
                     val slashCommands = json["slashCommands"]?.jsonArray
                     if (slashCommands == null) {
-                        logger.error("Failed to find slash_commands in JSON for $url: $json")
+                        secondTry = json
+//                        logger.error("Failed to find slash_commands in JSON for $url: $json")
                     } else {
                         val commands = slashCommands.mapNotNull { element ->
                             try {
@@ -285,6 +291,8 @@ object AppCommandManager {
             logger.error("Failed to fetch commands for app $appId via $url", e)
             return emptyList()
         }
+
+        logger.warn("Failed to fetch commands for app $appId: firstTry = $firstTry, secondTry = $secondTry")
 
         // if both of our attempts failed, return an empty list
         return emptyList()
