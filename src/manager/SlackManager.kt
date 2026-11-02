@@ -150,6 +150,8 @@ object SlackManager {
                 add("blocks", SharedData.gson.toJsonTree(blocks))
             }
 
+            logger.debug("Sending ephemeral message to {}: {}", responseUrl, body)
+
             val response = RateLimits.CHAT_POST_EPHEMERAL.withLimit {
                 SharedData.httpClient.post(responseUrl) {
                     bearerAuth(Config.SLACK_BOT_TOKEN)
