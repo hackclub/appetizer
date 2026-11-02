@@ -307,7 +307,7 @@ object App {
                 logger.error("Failed to check token ${maskSlackToken(token)}: ${error ?: jsonObject}")
                 return null
             }
-            runCatching { SharedData.rawDCookie = rawTry }
+            if (dCookie != null) runCatching { SharedData.rawDCookie = rawTry }
             return jsonObject to response
         } catch (e: Exception) {
             logger.error("Failed to check token ${maskSlackToken(token)}", e)

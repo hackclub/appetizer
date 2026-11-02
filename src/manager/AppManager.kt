@@ -167,7 +167,8 @@ object AppManager {
 //            resolvedBy = "Someone"
 //        )
 
-        val appText = if (request.appId.startsWith('A')) "<$MARKETPLACE_URL${request.appId}|${request.appName}>" else "`${request.appName}`"
+        val appText =
+            if (request.appId.startsWith('A')) "<$MARKETPLACE_URL${request.appId}|${request.appName}>" else "`${request.appName}`"
 
 
         SlackManager.sendTextMessage(
@@ -232,12 +233,18 @@ object AppManager {
         }
         logger.info("Handling request: {}", request.id)
 
+        if (AppInfoManager.canBeUsed()) {
+            AppInfoManager.removeFromCache(request.app.id)
+        }
+
         val isVerified = VerificationManager.isVerified(request.user.id)
         val scopeRules = InstallRequestRepository.getScopeRules()
         val isAppRestricted = InstallRequestRepository.isAppRestricted(request.app.id)
         val previousRequests =
             InstallRequestRepository.findPreviousRequests(request.app.id, request.user.id, request.id)
-        val appCommands = if (AppCommandManager.isValid()) AppCommandManager.indexCommands(request.app.id) else emptyList()
+        val appInfo = if (AppInfoManager.canBeUsed()) AppInfoManager.getAppInfo(request.app.id) else null
+        val appCommands =
+            if (AppCommandManager.isValid()) AppCommandManager.indexCommands(request.app.id) else emptyList()
         val commandsAllReadyInUse =
             if (appCommands.isEmpty()) emptyMap()
             else AppCommandManager.returnCommandOwners(appCommands.map { it.name })
@@ -245,7 +252,13 @@ object AppManager {
 
         // the app request has a domain field, but I didn't figure out what it does, because it seems always empty,
         // so I log if it is not empty to figure out what it does
-        if (request.domains.isNotEmpty()) logger.info("App request (${request.id} of ${request.app.id}) has domains: ${request.domains.joinToString(", ")}")
+        if (request.domains.isNotEmpty()) logger.info(
+            "App request (${request.id} of ${request.app.id}) has domains: ${
+                request.domains.joinToString(
+                    ", "
+                )
+            }"
+        )
 
         // because of that we're using a hacky way, which might break in the future, but it works now
         val unfurlDomains = request.scopes
@@ -265,12 +278,14 @@ object AppManager {
             commandsAllReadyInUse = commandsAllReadyInUse,
             commands = appCommands,
             unfurlDomains = unfurlDomains,
+            appInfo = appInfo
         )
         val decision = DecisionEngine.evaluate(decisionContext)
 
         val stateId = randomString(20)
 
-        val reviewTs = SlackWorkflowService.postInitialReviewMessage(request, isVerified, decision, decisionContext, stateId)
+        val reviewTs =
+            SlackWorkflowService.postInitialReviewMessage(request, isVerified, decision, decisionContext, stateId)
         InstallRequestRepository.saveRequest(request, isVerified, decision, reviewTs, stateId)
 
         if (decision.status == RequestStatus.APPROVED && decision.reason != RequestDecisionReason.SLACK_AUTOMATION) {

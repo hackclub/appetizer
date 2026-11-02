@@ -66,6 +66,11 @@ object VerificationManager {
 
     suspend fun handleUserBecameVerified(userId: String) {
         val pendingRequests = InstallRequestRepository.findPendingOrBlockedRequestsForUser(userId)
+        if (AppInfoManager.canBeUsed()) {
+            for (request in pendingRequests) {
+                AppInfoManager.removeFromCache(request.appId)
+            }
+        }
         for (record in pendingRequests) {
             val dummyRequest = AppRequested(
                 id = record.requestId,
@@ -108,6 +113,7 @@ object VerificationManager {
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
+            val appInfo = if (AppInfoManager.canBeUsed()) AppInfoManager.getAppInfo(record.appId) else null
             val appCommands =
                 if (AppCommandManager.isValid()) AppCommandManager.indexCommands(record.appId) else emptyList()
             val commandsAllReadyInUse =
@@ -125,7 +131,8 @@ object VerificationManager {
                     commandsAllReadyInUse = commandsAllReadyInUse,
                     commands = appCommands,
                     // unfurlDomains does currently not influence the decisions
-                    unfurlDomains = emptySet()
+                    unfurlDomains = emptySet(),
+                    appInfo = appInfo
                 )
             )
 

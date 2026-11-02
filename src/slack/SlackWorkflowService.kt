@@ -288,6 +288,37 @@ object SlackWorkflowService {
                             text("Description: ", style = TextStyle(bold = true))
                             text(request.app.description)
                         }
+                        if (decisionContext.appInfo != null) {
+                            richTextSection {
+                                text("Installed: ", style = TextStyle(bold = true))
+                                tag(
+                                    decisionContext.appInfo.isInstalled.toString(),
+                                    color = if (decisionContext.appInfo.isInstalled) TagColor.GREEN else TagColor.RED
+                                )
+                            }
+                            val authorizationsCount = decisionContext.appInfo.authorizationsCount
+                            if (authorizationsCount.isSomething()) richTextSection {
+                                text("Authorized by: ", style = TextStyle(bold = true))
+                                text(authorizationsCount.toString())
+                            }
+                            val publicChannelCount = decisionContext.appInfo.publicChannelCount
+                            val otherChannelCount = decisionContext.appInfo.otherChannelCount
+                            val allChannelsCount = decisionContext.appInfo.allChannelCount
+                            if (publicChannelCount.isSomething() || otherChannelCount.isSomething() || allChannelsCount.isSomething()) {
+                                richTextSection {
+                                    text("Channels: ", style = TextStyle(bold = true))
+                                    if (publicChannelCount.isSomething()) text("$publicChannelCount public")
+                                    if (otherChannelCount.isSomething()) {
+                                        if (publicChannelCount.isSomething()) text(", ")
+                                        text("$otherChannelCount other")
+                                    }
+                                    if (allChannelsCount.isSomething()) {
+                                        if (publicChannelCount.isSomething() || otherChannelCount.isSomething()) text(", ")
+                                        text("$allChannelsCount hidden")
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 richTextSection {
@@ -1526,7 +1557,8 @@ object SlackWorkflowService {
             "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
         val details = "${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)} $BULLET #${rule.id}"
         val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
-        val publicDescription = rule.publicDescription?.takeIf { it.isNotBlank() }?.let { "\nPublic Description: _${it.take(150)}_" } ?: ""
+        val publicDescription =
+            rule.publicDescription?.takeIf { it.isNotBlank() }?.let { "\nPublic Description: _${it.take(150)}_" } ?: ""
 
         // sadly we are not able to use richText here (which would be very nice, due the tag element),
         // because the accessory only works in section blocks
@@ -2287,4 +2319,6 @@ object SlackWorkflowService {
         }
         divider()
     }
+
+    private fun Int?.isSomething() = this != null && this != 0
 }

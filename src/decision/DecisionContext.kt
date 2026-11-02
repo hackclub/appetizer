@@ -1,10 +1,6 @@
 package com.fantamomo.slack.approver.decision
 
-import com.fantamomo.slack.approver.model.AppRequested
-import com.fantamomo.slack.approver.model.PreviousRequestRecord
-import com.fantamomo.slack.approver.model.RestrictedScope
-import com.fantamomo.slack.approver.model.ScopeRule
-import com.fantamomo.slack.approver.model.SlashCommand
+import com.fantamomo.slack.approver.model.*
 
 data class DecisionContext(
     val request: AppRequested,
@@ -14,7 +10,8 @@ data class DecisionContext(
     val previousRequests: List<PreviousRequestRecord>,
     val commands: List<SlashCommand>,
     val commandsAllReadyInUse: Map<String, String>,
-    val unfurlDomains: Set<String>
+    val unfurlDomains: Set<String>,
+    val appInfo: AppInfo?
 ) {
     val restrictedScopes: List<RestrictedScope>
         get() = scopeRules.map { RestrictedScope.fromScopeRule(it) }

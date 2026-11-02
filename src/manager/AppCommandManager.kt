@@ -172,6 +172,23 @@ object AppCommandManager {
     }
 
     suspend fun getCommands(appId: String): List<SlashCommand> {
+        val commands = getCommandsIntern(appId).toMutableList()
+        val appInfo = AppInfoManager.getAppInfo(appId)
+
+        appInfo?.commands?.let { commands.addAll(it) }
+
+        return commands
+            .groupBy { it.name }
+            .map { (name, duplicates) ->
+                SlashCommand(
+                    name = name,
+                    description = duplicates.firstNotEmpty { it.description },
+                    usageHint = duplicates.firstNotEmpty { it.usageHint }
+                )
+            }
+    }
+
+    private suspend fun getCommandsIntern(appId: String): MutableList<SlashCommand> {
         requireValid()
         require(appId.isNotBlank()) { "appId cannot be blank" }
         require(appId.startsWith('A')) { "appId must start with A" }
@@ -215,7 +232,7 @@ object AppCommandManager {
                     // the problem is if slash_commands is empty, that does not mean it have no commands
                     // yeah, i know kinda bad but it is so
                     if (!slashCommands.isEmpty()) {
-                        return slashCommands.mapNotNull {
+                        return slashCommands.mapNotNullTo(mutableListOf()) {
                             try {
                                 val jsonObject = it.jsonObject
                                 SlashCommand(
@@ -265,7 +282,7 @@ object AppCommandManager {
                         secondTry = json
 //                        logger.error("Failed to find slash_commands in JSON for $url: $json")
                     } else {
-                        val commands = slashCommands.mapNotNull { element ->
+                        val commands = slashCommands.mapNotNullTo(mutableListOf()) { element ->
                             try {
                                 val jsonObject = element.jsonObject
                                 SlashCommand(
@@ -289,13 +306,12 @@ object AppCommandManager {
             }
         } catch (e: Exception) {
             logger.error("Failed to fetch commands for app $appId via $url", e)
-            return emptyList()
         }
 
         logger.warn("Failed to fetch commands for app $appId: firstTry = $firstTry, secondTry = $secondTry")
 
         // if both of our attempts failed, return an empty list
-        return emptyList()
+        return mutableListOf()
     }
 
     suspend fun indexCommands(appId: String): List<SlashCommand> {
@@ -362,5 +378,13 @@ object AppCommandManager {
             .replace("&apos;", "'")
 
         return SharedData.json.parseToJsonElement(decoded)
+    }
+
+    private inline fun <T> List<T>.firstNotEmpty(
+        selector: (T) -> String
+    ): String {
+        return firstNotNullOfOrNull { item ->
+            selector(item).takeIf { it.isNotBlank() }
+        } ?: ""
     }
 }
