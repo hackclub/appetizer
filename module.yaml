@@ -33,7 +33,9 @@ test-dependencies:
 settings:
   jvm:
     release: 21
+    jdk:
+      version: 21
+      distributions: [temurin]
   ktor: enabled
   kotlin:
     serialization: enabled
-

@@ -1,8 +1,11 @@
+# syntax=docker/dockerfile:1.7
 
 # Stage 1: Build stage
 FROM dhi.io/eclipse-temurin:21-jdk-debian-dev AS builder
 
 WORKDIR /app
+
+ENV KOTLIN_CLI_NO_WELCOME_BANNER=1
 
 # Install the downloader required by the Kotlin wrapper in the DHI dev image.
 RUN apt-get update && \
@@ -13,7 +16,9 @@ COPY kotlin kotlin.bat project.yaml module.yaml libs.versions.toml ./
 COPY src ./src
 COPY resources ./resources
 
-RUN chmod +x ./kotlin && \
+RUN --mount=type=cache,id=kotlin-bootstrap,target=/root/.cache/JetBrains/Kotlin/cli \
+    --mount=type=cache,id=kotlin-shared,target=/root/.cache/JetBrains/Kotlin \
+    chmod +x ./kotlin && \
     ./kotlin package -f executable-jar && \
     find build/tasks -name "*-executable.jar" \
       -exec cp {} /app/app.jar \; && \
