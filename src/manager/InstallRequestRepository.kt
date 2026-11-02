@@ -591,6 +591,7 @@ object InstallRequestRepository {
                             scopeType = it[ScopeRulesTable.scopeType],
                             enabled = it[ScopeRulesTable.enabled],
                             description = it[ScopeRulesTable.description],
+                            publicDescription = it[ScopeRulesTable.publicDescription],
                             createdAt = it[ScopeRulesTable.createdAt],
                             updatedAt = it[ScopeRulesTable.updatedAt]
                         )
@@ -618,6 +619,7 @@ object InstallRequestRepository {
                                 it[scopeType] = rule.scopeType
                                 it[enabled] = true
                                 it[description] = "Migrated from legacy restricted scope"
+                                it[publicDescription] = null
                                 it[createdAt] = now
                                 it[updatedAt] = now
                             }
@@ -633,6 +635,7 @@ object InstallRequestRepository {
                                     scopeType = it[ScopeRulesTable.scopeType],
                                     enabled = it[ScopeRulesTable.enabled],
                                     description = it[ScopeRulesTable.description],
+                                    publicDescription = it[ScopeRulesTable.publicDescription],
                                     createdAt = it[ScopeRulesTable.createdAt],
                                     updatedAt = it[ScopeRulesTable.updatedAt]
                                 )
@@ -664,6 +667,7 @@ object InstallRequestRepository {
                             scopeType = it[ScopeRulesTable.scopeType],
                             enabled = it[ScopeRulesTable.enabled],
                             description = it[ScopeRulesTable.description],
+                            publicDescription = it[ScopeRulesTable.publicDescription],
                             createdAt = it[ScopeRulesTable.createdAt],
                             updatedAt = it[ScopeRulesTable.updatedAt]
                         )
@@ -687,6 +691,7 @@ object InstallRequestRepository {
                     it[scopeType] = rule.scopeType
                     it[enabled] = rule.enabled
                     it[description] = rule.description?.trim()
+                    it[publicDescription] = rule.publicDescription?.trim()
                     it[createdAt] = now
                     it[updatedAt] = now
                 }[ScopeRulesTable.id]
@@ -711,6 +716,7 @@ object InstallRequestRepository {
                     it[scopeType] = rule.scopeType
                     it[enabled] = rule.enabled
                     it[description] = rule.description?.trim()
+                    it[publicDescription] = rule.publicDescription?.trim()
                     it[updatedAt] = now
                 } > 0
             }

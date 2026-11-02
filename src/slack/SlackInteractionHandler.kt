@@ -789,6 +789,8 @@ object SlackInteractionHandler {
 
         val description = extractInputValue(values, "description_block", "description_input")?.trim()
 
+        val publicDescription = extractInputValue(values, "public_description_block", "public_description_input")?.trim()
+
         val existingId = privateMetadata.toLongOrNull()
         if (existingId != null && existingId > 0) {
             val existing = InstallRequestRepository.getScopeRule(existingId)
@@ -799,7 +801,8 @@ object SlackInteractionHandler {
                 userTarget = userTarget,
                 scopeType = scopeType,
                 enabled = existing?.enabled ?: true,
-                description = description
+                description = description,
+                publicDescription = publicDescription,
             )
             InstallRequestRepository.updateScopeRule(updated)
             logger.info("Updated scope rule $existingId by user $userId")
@@ -810,7 +813,8 @@ object SlackInteractionHandler {
                 userTarget = userTarget,
                 scopeType = scopeType,
                 enabled = true,
-                description = description
+                description = description,
+                publicDescription = publicDescription
             )
             InstallRequestRepository.addScopeRule(newRule)
             logger.info("Created new scope rule for pattern $pattern by user $userId")

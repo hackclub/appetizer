@@ -1405,7 +1405,7 @@ object SlackWorkflowService {
             }
             divider()
 
-            for ((action, emoji, title, explanation) in groups) {
+            for ((action, _, title, explanation) in groups) {
                 val groupRules = rules.filter { it.action == action }
                 header {
                     text(title, true)
@@ -1432,6 +1432,9 @@ object SlackWorkflowService {
                                     text(typeLabel(rule.scopeType))
                                     if (rule.pattern == "*" && rule.userTarget == RuleUserTarget.ALL && rule.scopeType == ScopeType.BOTH) {
                                         text(" (this is the catch all rule)")
+                                    }
+                                    if (!rule.publicDescription.isNullOrBlank()) {
+                                        text("\n${rule.publicDescription}", style = TextStyle(italic = true))
                                     }
                                 }
                             }
@@ -1523,12 +1526,13 @@ object SlackWorkflowService {
             "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
         val details = "${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)} $BULLET #${rule.id}"
         val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
+        val publicDescription = rule.publicDescription?.takeIf { it.isNotBlank() }?.let { "\nPublic Description: _${it.take(150)}_" } ?: ""
 
         // sadly we are not able to use richText here (which would be very nice, due the tag element),
         // because the accessory only works in section blocks
 
         section {
-            markdownText("$title\n$details$description")
+            markdownText("$title\n$details$description$publicDescription")
             accessory {
                 overflowMenu {
                     actionId("admin_rule_menu")
@@ -2084,6 +2088,16 @@ object SlackWorkflowService {
                     actionId = "description_input",
                     placeholder = "e.g. Security policy for admin scopes",
                     initial = rule?.description
+                ),
+                optional = true
+            ),
+            inputBlock(
+                blockId = "public_description_block",
+                label = "Public Note (optional)",
+                element = textInputElement(
+                    actionId = "public_description_input",
+                    placeholder = "e.g. To avoid scrapping of channels",
+                    initial = rule?.publicDescription
                 ),
                 optional = true
             ),

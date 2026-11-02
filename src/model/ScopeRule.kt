@@ -10,6 +10,7 @@ data class ScopeRule(
     val scopeType: ScopeType = ScopeType.BOTH,
     val enabled: Boolean = true,
     val description: String? = null,
+    val publicDescription: String? = null,
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
 ) {

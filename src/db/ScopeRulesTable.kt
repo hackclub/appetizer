@@ -33,6 +33,10 @@ object ScopeRulesTable : Table("scope_rules") {
         .nullable()
         .comment("Optional description or note")
 
+    val publicDescription = varchar("public_description", 500)
+        .nullable()
+        .comment("Optional public description or note")
+
     val createdAt = timestamp("created_at")
         .defaultExpression(CurrentTimestamp)
         .comment("Timestamp of when the rule was created")
