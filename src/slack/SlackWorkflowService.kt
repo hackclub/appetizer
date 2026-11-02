@@ -12,10 +12,12 @@ import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
 import com.fantamomo.slack.approver.utils.blockkit.TagColor
 import com.fantamomo.slack.approver.utils.blockkit.TextStyle
+import com.fantamomo.slack.approver.utils.blockkit.addMarkdown
 import com.fantamomo.slack.approver.utils.blockkit.tag
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.slack.api.model.kotlin_extension.block.ActionsBlockBuilder
+import com.slack.api.model.kotlin_extension.block.composition.dsl.RichTextObjectDsl
 import com.slack.api.model.kotlin_extension.block.dsl.LayoutBlockDsl
 import com.slack.api.model.kotlin_extension.block.element.ListStyle
 import com.slack.api.model.kotlin_extension.block.element.RichTextSectionElementBuilder
@@ -76,14 +78,22 @@ object SlackWorkflowService {
         }
     }
 
-    private fun RichTextSectionElementBuilder.addReason(reason: RequestDecisionReason?, resolutionMessage: String?, resolvedBy: String?) {
+    private fun RichTextSectionElementBuilder.addReason(
+        reason: RequestDecisionReason?,
+        resolutionMessage: String?,
+        resolvedBy: String?
+    ) {
         if (resolvedBy == "THIRD_PARTY") {
             return text("The request was resolved by a third party")
         }
         if (resolvedBy != null) {
             text("Resolved by ")
             user(resolvedBy)
-            if (!resolutionMessage.isNullOrBlank()) text(" ($resolutionMessage)")
+            if (!resolutionMessage.isNullOrBlank()) {
+                text(" (")
+                addMarkdown(resolutionMessage)
+                text(")")
+            }
             return
         }
         val reason = when (reason) {
@@ -235,7 +245,7 @@ object SlackWorkflowService {
                         }
                         if (!userMessageWithNewLines) {
                             text("\nApp Details ", style = TextStyle(bold = true))
-                            link(MARKETPLACE_URL +request.app.id, text = "(marketplace)")
+                            link(MARKETPLACE_URL + request.app.id, text = "(marketplace)")
                             text(": ", style = TextStyle(bold = true))
                         }
                     }
@@ -247,7 +257,7 @@ object SlackWorkflowService {
                     richTextSection {
                         text("App Details", style = TextStyle(bold = true))
                         text(" (")
-                        link(MARKETPLACE_URL +request.app.id, text = "marketplace")
+                        link(MARKETPLACE_URL + request.app.id, text = "marketplace")
                         text(")")
                         text(": ", style = TextStyle(bold = true))
                     }
@@ -883,38 +893,177 @@ object SlackWorkflowService {
 
     suspend fun sendHelpMessage(responseUrl: Url) {
         SlackManager.sendEphemeral(responseUrl = responseUrl) {
-            section {
-                markdownText(buildString {
-                    val B = BULLET
+            richText {
+                richTextSection {
+                    text("Usage info for ")
+                    text(Config.SLACK_SLASH_COMMAND, style = TextStyle(code = true))
+                    text(":\n")
+                }
 
-                    appendLine("Usage info for `${Config.SLACK_SLASH_COMMAND}`:")
-                    appendLine()
-                    appendLine("$B `team`: Shows all team members")
-                    appendLine("    $B `add <user>`: Adds a user to the team")
-                    appendLine("    $B `remove <user>`: Removes a user from the team")
-                    appendLine("$B `scopes`: Lists the current restricted/allowed scopes")
-                    appendLine("    $B `allow <scope> [type]`: Allows a scope")
-                    appendLine("    $B `restrict <scope> [type] [review]`: Restricts a scope")
-                    appendLine("    $B `reset <scope> [type]`: Resets the config for a scope")
-                    appendLine("    $B `allow-unverified <scope> [type]`: Allows a scope for unverified users")
-                    appendLine("$B `settings`: Shows all settings")
-                    appendLine("    $B `set <name> <value>`: Sets the value of a setting")
-                    appendLine("    $B `remove <name>`: Removes a setting")
-                    appendLine("    $B `get <name>`: Gets the value of a setting")
-                    appendLine("$B `help`: Shows this help message")
-                    appendLine()
-                    appendLine("Args:")
-                    appendLine("$B `<scope>`: The scope to match")
-                    appendLine("    $B Can be directly the scope, to only match it")
-                    appendLine("    $B Or use a `*` for wildcard matching: `admin.*` (every scope starting with `admin.`), `*:read` (every scope ending with `:read`)")
-                    appendLine("$B `[type]`: Can be one of the following")
-                    appendLine("    $B `USER`: The user scope")
-                    appendLine("    $B `BOT`: The bot scope")
-                    appendLine("    $B `BOTH`: Both user and bot scope (default)")
-                    appendLine("$B `[review]`: bool")
-                    appendLine("    $B `true`: App is send to the review team")
-                    appendLine("    $B `false`: App is directly declined (default)")
-                })
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("team", style = TextStyle(code = true))
+                        text(": Shows all team members")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("add <user>", style = TextStyle(code = true))
+                        text(": Adds a user to the team")
+                    }
+                    richTextSection {
+                        text("remove <user>", style = TextStyle(code = true))
+                        text(": Removes a user from the team")
+                    }
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("scopes", style = TextStyle(code = true))
+                        text(": Lists the current restricted/allowed scopes")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("allow <scope> [type]", style = TextStyle(code = true))
+                        text(": Allows a scope")
+                    }
+                    richTextSection {
+                        text("restrict <scope> [type] [review]", style = TextStyle(code = true))
+                        text(": Restricts a scope")
+                    }
+                    richTextSection {
+                        text("reset <scope> [type]", style = TextStyle(code = true))
+                        text(": Resets the config for a scope")
+                    }
+                    richTextSection {
+                        text("allow-unverified <scope> [type]", style = TextStyle(code = true))
+                        text(": Allows a scope for unverified users")
+                    }
+                    richTextSection {
+                        text("While you can still use this command for managing scopes, it is recommended to use the modal in the app home instead")
+                    }
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("settings", style = TextStyle(code = true))
+                        text(": Shows all settings")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("set <name> <value>", style = TextStyle(code = true))
+                        text(": Sets the value of a setting")
+                    }
+                    richTextSection {
+                        text("remove <name>", style = TextStyle(code = true))
+                        text(": Removes a setting")
+                    }
+                    richTextSection {
+                        text("get <name>", style = TextStyle(code = true))
+                        text(": Gets the value of a setting")
+                    }
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("help", style = TextStyle(code = true))
+                        text(": Shows this help message")
+                    }
+                }
+
+                richTextSection {
+                    text("\nArgs:")
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("<scope>", style = TextStyle(code = true))
+                        text(": The scope to match")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("Can be directly the scope, to only match it")
+                    }
+                    richTextSection {
+                        text("Or use a ", style = TextStyle())
+                        text("*", style = TextStyle(code = true))
+                        text(" for wildcard matching: ")
+                        text("admin.*", style = TextStyle(code = true))
+                        text(" (every scope starting with ")
+                        text("admin.", style = TextStyle(code = true))
+                        text("), ")
+                        text("*:read", style = TextStyle(code = true))
+                        text(" (every scope ending with ")
+                        text(":read", style = TextStyle(code = true))
+                        text(")")
+                    }
+                    richTextSection {
+                        text("You could even use regex, start it with ")
+                        text("/", style = TextStyle(code = true))
+                        text(" and end it with ")
+                        text("/", style = TextStyle(code = true))
+                    }
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("[type]", style = TextStyle(code = true))
+                        text(": Can be one of the following")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("USER", style = TextStyle(code = true))
+                        text(": The user scope")
+                    }
+                    richTextSection {
+                        text("BOT", style = TextStyle(code = true))
+                        text(": The bot scope")
+                    }
+                    richTextSection {
+                        text("BOTH", style = TextStyle(code = true))
+                        text(": Both user and bot scope (default)")
+                    }
+                }
+
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("[review]", style = TextStyle(code = true))
+                        text(": bool")
+                    }
+                }
+                richTextList {
+                    style(ListStyle.BULLET)
+                    indent(1)
+                    richTextSection {
+                        text("true", style = TextStyle(code = true))
+                        text(": App is send to the review team")
+                    }
+                    richTextSection {
+                        text("false", style = TextStyle(code = true))
+                        text(": App is directly declined (default)")
+                    }
+                }
             }
         }
     }
@@ -1052,8 +1201,13 @@ object SlackWorkflowService {
             header {
                 text("App Approval Dashboard", true)
             }
-            section {
-                markdownText(":wave: Welcome, <@$userId>. You can review and manage app installation requests here.")
+            richText {
+                richTextSection {
+                    emoji("wave")
+                    text(" Welcome, ")
+                    user(userId)
+                    text(". You can review and manage app installation requests here")
+                }
             }
             divider()
 
@@ -1061,8 +1215,11 @@ object SlackWorkflowService {
                 text("Pending Requests (${pendingRequests.size})", true)
             }
             if (pendingRequests.isEmpty()) {
-                section {
-                    markdownText(":tada: No pending installation requests to review!")
+                richText {
+                    richTextSection {
+                        emoji("tada")
+                        text(" No pending installation requests to review!")
+                    }
                 }
             } else {
                 for (req in pendingRequests) reviewEntry(req)
@@ -1072,8 +1229,10 @@ object SlackWorkflowService {
                 header {
                     text("Automatically Denied (${autoDenied.size})", true)
                 }
-                section {
-                    markdownText("These requests were denied automatically and need no review. You can still override them.")
+                richText {
+                    richTextSection {
+                        text("These requests were denied automatically and need no review. You can still override them.")
+                    }
                 }
                 for (req in autoDenied) reviewEntry(req)
             }
@@ -1097,15 +1256,21 @@ object SlackWorkflowService {
                 text("My App Installation Requests", true)
             }
             if (!isVerified) {
-                section {
-                    markdownText(":warning: *Your account is not verified.* <https://auth.hackclub.com|Verify here>")
+                richText {
+                    richTextSection {
+                        emoji("warning")
+                        text(" Your account is not verified. ", style = TextStyle(bold = true))
+                        link("https://auth.hackclub.com", "Verify here")
+                    }
                 }
             }
             divider()
 
             if (userRequests.isEmpty()) {
-                section {
-                    markdownText("You have not requested any apps yet.")
+                richText {
+                    richTextSection {
+                        text("You have not requested any apps yet.")
+                    }
                 }
             } else {
                 for (req in userRequests) {
@@ -1168,20 +1333,25 @@ object SlackWorkflowService {
             .filter { it.enabled }
             .sortedWith(ScopeRulePrecedenceComparator)
 
+        data class ScopeRuleGroup(val action: RuleAction, val emoji: String, val title: String, val description: String)
+
         val groups = listOf(
-            Triple(
+            ScopeRuleGroup(
                 RuleAction.ALLOW,
-                ":white_check_mark: Allowed",
+                "white_check_mark",
+                "Allowed",
                 "Apps that only request these scopes are approved automatically."
             ),
-            Triple(
+            ScopeRuleGroup(
                 RuleAction.REVIEW,
-                ":hourglass_flowing_sand: Needs manual review",
+                "hourglass_flowing_sand",
+                "Needs manual review",
                 "Apps requesting these scopes are sent to the approval team."
             ),
-            Triple(
+            ScopeRuleGroup(
                 RuleAction.BLOCK,
-                ":no_entry_sign: Declined",
+                "no_entry_sign",
+                "Declined",
                 "Apps requesting these scopes are declined automatically. You can still ask for a manual review."
             ),
         )
@@ -1191,13 +1361,23 @@ object SlackWorkflowService {
             header {
                 text("Scope Policy", true)
             }
-            section {
-                markdownText(
-                    "Every installation request is checked against the rules below before a person looks at it.\n\n" +
-                            if (isVerified) "*Your account:* verified"
-                            else "*Your account:* not verified (<https://auth.hackclub.com|verify here>). " +
-                                    "Rules marked _unverified users_ or _everyone_ are the ones that apply to you."
-                )
+            richText {
+                richTextSection {
+                    text("Every installation request is checked against the rules below before a person looks at it.")
+                    text("\n")
+                    text("Your account: ", style = TextStyle(bold = true))
+                    if (isVerified) {
+                        text("verified")
+                    } else {
+                        text("not verified (")
+                        link("https://auth.hackclub.com", "verify here")
+                        text("). Rules marked ")
+                        text("unverified users", style = TextStyle(italic = true))
+                        text(" or ")
+                        text("everyone", style = TextStyle(italic = true))
+                        text(" are the ones that apply to you.")
+                    }
+                }
             }
             context {
                 markdownText(
@@ -1210,42 +1390,51 @@ object SlackWorkflowService {
                     .sortedByDescending { it.action }
             if (catchAll.isNotEmpty()) {
                 val action = catchAll.first().action
-                section {
-                    markdownText(
-                        "There is a catch-all rule. That means if none of the other rules match, " + when (action) {
-                            RuleAction.ALLOW -> "it will be approved."
-                            RuleAction.REVIEW -> "it will need a manual review."
-                            RuleAction.BLOCK -> "it will be blocked."
-                        }
-                    )
+                richText {
+                    richTextSection {
+                        text("There is a catch-all rule. That means if none of the other rules match, ")
+                        text(
+                            when (action) {
+                                RuleAction.ALLOW -> "it will be approved."
+                                RuleAction.REVIEW -> "it will need a manual review."
+                                RuleAction.BLOCK -> "it will be blocked."
+                            }, style = TextStyle(italic = true)
+                        )
+                    }
                 }
             }
             divider()
 
-            for ((action, title, explanation) in groups) {
+            for ((action, emoji, title, explanation) in groups) {
                 val groupRules = rules.filter { it.action == action }
                 header {
-                    text(
-                        title.removePrefix(":white_check_mark: ")
-                            .removePrefix(":hourglass_flowing_sand: ")
-                            .removePrefix(":no_entry_sign: "), true
-                    )
+                    text(title, true)
                 }
                 context {
                     markdownText(explanation)
                 }
                 if (groupRules.isEmpty()) {
-                    section {
-                        markdownText("_No rules._")
+                    richText {
+                        richTextSection {
+                            text("No rules.", style = TextStyle(italic = true))
+                        }
                     }
                 } else {
-                    val lines = groupRules.map { rule ->
-                        "$BULLET `${rule.pattern}`  ${targetLabel(rule.userTarget)}, ${typeLabel(rule.scopeType)}" +
-                                if (rule.pattern == "*" && rule.userTarget == RuleUserTarget.ALL && rule.scopeType == ScopeType.BOTH) " (this is the catch all rule)" else ""
-                    }
-                    for (chunk in chunkLines(lines)) {
-                        section {
-                            markdownText(chunk)
+                    richText {
+                        richTextList {
+                            style(ListStyle.BULLET)
+                            for (rule in groupRules) {
+                                richTextSection {
+                                    text(rule.pattern, style = TextStyle(code = true))
+                                    text("  ")
+                                    tag(targetLabel(rule.userTarget), targetColor(rule.userTarget))
+                                    text(", ")
+                                    text(typeLabel(rule.scopeType))
+                                    if (rule.pattern == "*" && rule.userTarget == RuleUserTarget.ALL && rule.scopeType == ScopeType.BOTH) {
+                                        text(" (this is the catch all rule)")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1260,8 +1449,6 @@ object SlackWorkflowService {
         val sortedRules = rules.sortedWith(ScopeRulePrecedenceComparator)
         val test = scopeTests[userId]
 
-        val membersText =
-            if (members.isEmpty()) "_No team members yet._" else members.joinToString(", ") { "<@$it>" }
         val enabledCount = rules.count { it.enabled }
 
         SlackManager.publishHomeView(userId) {
@@ -1269,8 +1456,20 @@ object SlackWorkflowService {
             header {
                 text("Admin Dashboard", true)
             }
-            section {
-                markdownText("*Team members (${members.size})*\n${membersText.take(2900)}")
+            richText {
+                richTextSection {
+                    text("Team members (${members.size})\n", style = TextStyle(bold = true))
+                    if (members.isEmpty()) {
+                        text("No team members yet.", style = TextStyle(italic = true))
+                    } else {
+                        for ((index, member) in members.withIndex()) {
+                            if (index > 0) {
+                                text(", ")
+                            }
+                            user(member)
+                        }
+                    }
+                }
             }
             divider()
 
@@ -1324,6 +1523,9 @@ object SlackWorkflowService {
             "${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" + if (rule.enabled) "" else " (_disabled_)"
         val details = "${targetLabel(rule.userTarget)} $BULLET ${typeLabel(rule.scopeType)} $BULLET #${rule.id}"
         val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
+
+        // sadly we are not able to use richText here (which would be very nice, due the tag element),
+        // because the accessory only works in section blocks
 
         section {
             markdownText("$title\n$details$description")
@@ -1389,73 +1591,127 @@ object SlackWorkflowService {
         else -> "does not apply"
     }
 
-    private fun ruleSummary(rule: ScopeRule): String =
-        "#${rule.id} `${rule.pattern}` $BULLET ${actionLabel(rule.action)} $BULLET ${targetLabel(rule.userTarget)} $BULLET ${
-            typeLabel(
-                rule.scopeType
-            )
-        }"
+    private fun RichTextObjectDsl.ruleSummary(rule: ScopeRule) {
+        text("#${rule.id} ")
+        text(rule.pattern, style = TextStyle(code = true))
+        text(" ")
+        tag(actionLabel(rule.action), actionColor(rule.action))
+        text(" ")
+        tag(targetLabel(rule.userTarget), targetColor(rule.userTarget))
+        text(" ")
+        text(typeLabel(rule.scopeType))
+    }
+//        "#${rule.id} `${rule.pattern}` $BULLET ${actionLabel(rule.action)} $BULLET ${targetLabel(rule.userTarget)} $BULLET ${
+//            typeLabel(
+//                rule.scopeType
+//            )
+//        }"
 
     private fun LayoutBlockDsl.scopeTestPanel(test: ScopeTestInput, rules: List<ScopeRule>) {
         val (winner, evaluations) = evaluateScope(rules, test.scope, test.tokenType, test.verified)
-        val personText = if (test.verified) "a *verified* user" else "an *unverified* user"
         val tokenText = if (test.tokenType.equals("user", true)) "user" else "bot"
 
-        val outcome = when {
-            winner != null -> when (winner.action) {
-                RuleAction.ALLOW -> ":white_check_mark: *Allowed.* The scope is approved automatically."
-                RuleAction.REVIEW -> ":hourglass_flowing_sand: *Manual review.* The request is sent to the approval team."
-                RuleAction.BLOCK -> ":no_entry_sign: *Blocked.* The request is declined automatically."
-            }
-
-            test.verified ->
-                ":white_check_mark: *Allowed (no rule).* Verified users may use scopes that no rule matches."
-
-            else ->
-                ":no_entry_sign: *Declined (no rule).* No rule explicitly allows this scope for unverified users."
-        }
-
         divider()
-        section {
-            markdownText("*Scope test*\n`${test.scope}` as $tokenText scope, requested by $personText.")
+        header {
+            text("Scope test")
         }
-        section {
-            markdownText(outcome)
+        richText {
+            richTextSection {
+                text(test.scope, style = TextStyle(code = true))
+                text(" as ")
+                text(tokenText, style = TextStyle(bold = true))
+                text(" scope, requested by ")
+                if (test.verified) {
+                    text("a ")
+                    text("verified", style = TextStyle(bold = true))
+                } else {
+                    text("an ")
+                    text("unverified", style = TextStyle(bold = true))
+                }
+                text(" user")
+            }
+        }
+        richText {
+            richTextSection {
+                text("\n")
+                when {
+                    winner != null -> when (winner.action) {
+                        RuleAction.ALLOW -> {
+                            tag("Approved", TagColor.GREEN)
+                            text(" The scope is approved automatically.")
+                        }
+
+                        RuleAction.REVIEW -> {
+                            tag("Manual Review", TagColor.YELLOW)
+                            text(" The Request is sent to the approval team.")
+                        }
+
+                        RuleAction.BLOCK -> {
+                            tag("Blocked", TagColor.RED)
+                            text("The request is declined automatically.")
+                        }
+                    }
+
+                    test.verified -> {
+                        tag("Allowed (no rule)", TagColor.GREEN)
+                        text(" Verified users may use scopes that no rule matches.")
+                    }
+
+                    else -> {
+                        tag("Declined (no rule)", TagColor.RED)
+                        text(" No rule explicitly allows this scope for unverified users.")
+                    }
+                }
+            }
         }
 
         val applied = evaluations.firstOrNull { it.state == RuleState.APPLIED }
         if (applied != null) {
-            section {
-                markdownText("*Applied rule*\n${ruleSummary(applied.rule)}")
+            header {
+                text("Applied rule")
+            }
+            richText {
+                richTextSection {
+                    ruleSummary(applied.rule)
+                }
             }
         }
 
         val overridden = evaluations.filter { it.state == RuleState.OVERRIDDEN }
         if (overridden.isNotEmpty()) {
-            context {
-                markdownText("*Also matching, but overridden*")
+            header {
+                text("Also matching, but overridden (${overridden.size})")
             }
-            for (chunk in chunkLines(overridden.map { "${ruleSummary(it.rule)} (${it.note})" })) {
-                context {
-                    markdownText(chunk)
+            richText {
+                for (rule in overridden) {
+                    richTextSection {
+                        ruleSummary(rule.rule)
+                        text(" (")
+                        text(rule.note, style = TextStyle(italic = true))
+                        text(")")
+                    }
                 }
             }
         }
 
         val inactive = evaluations.filter { it.state == RuleState.INACTIVE }
         if (inactive.isNotEmpty()) {
-            context {
-                markdownText("*Not applicable (${inactive.size})*")
+            header {
+                text("Not applicable (${inactive.size})")
             }
-            val lines = inactive.take(MAX_TEST_INACTIVE_SHOWN).map { "${ruleSummary(it.rule)} (${it.note})" }
-            for (chunk in chunkLines(lines)) {
-                context {
-                    markdownText(chunk)
+            richText {
+                for (rule in inactive.take(MAX_TEST_INACTIVE_SHOWN)) {
+                    richTextSection {
+                        ruleSummary(rule.rule)
+                        text(" (")
+                        text(rule.note, style = TextStyle(italic = true))
+                        text(")")
+                    }
                 }
-            }
-            if (inactive.size > MAX_TEST_INACTIVE_SHOWN) {
-                context {
-                    markdownText("… and ${inactive.size - MAX_TEST_INACTIVE_SHOWN} more.")
+                if (inactive.size > MAX_TEST_INACTIVE_SHOWN) {
+                    richTextSection {
+                        text("\n… and ${inactive.size - MAX_TEST_INACTIVE_SHOWN} more.")
+                    }
                 }
             }
         }
@@ -1513,6 +1769,12 @@ object SlackWorkflowService {
         RuleAction.BLOCK -> "Block"
     }
 
+    private fun actionColor(action: RuleAction): TagColor = when (action) {
+        RuleAction.ALLOW -> TagColor.GREEN
+        RuleAction.REVIEW -> TagColor.YELLOW
+        RuleAction.BLOCK -> TagColor.RED
+    }
+
     private fun actionEmoji(action: RuleAction): String = when (action) {
         RuleAction.ALLOW -> ":white_check_mark:"
         RuleAction.REVIEW -> ":hourglass_flowing_sand:"
@@ -1523,6 +1785,12 @@ object SlackWorkflowService {
         RuleUserTarget.ALL -> "everyone"
         RuleUserTarget.VERIFIED -> "verified users"
         RuleUserTarget.UNVERIFIED -> "unverified users"
+    }
+
+    private fun targetColor(target: RuleUserTarget): TagColor = when (target) {
+        RuleUserTarget.ALL -> TagColor.BLUE
+        RuleUserTarget.VERIFIED -> TagColor.GREEN
+        RuleUserTarget.UNVERIFIED -> TagColor.ORANGE
     }
 
     private fun typeLabel(type: ScopeType): String = when (type) {
