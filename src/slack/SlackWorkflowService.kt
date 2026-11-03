@@ -1153,6 +1153,7 @@ object SlackWorkflowService {
     }
 
     suspend fun handleAppHomeOpened(userId: String) {
+        logger.info("Received app home opened event of $userId")
         val now = Clock.System.now()
         if (!VerificationManager.isVerifiedCached(userId)) {
             val lastCheck = appHomeCheckCooldown[userId]

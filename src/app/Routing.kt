@@ -32,7 +32,8 @@ fun Application.configureRouting() {
 
     routing {
         get("/") {
-            call.respondText("OK", status = HttpStatusCode.OK)
+            call.respondRedirect("https://github.com/hackclub/appetizer", permanent = false)
+//            call.respondText("OK", status = HttpStatusCode.OK)
         }
 
         post("/slack/events") {
@@ -77,18 +78,9 @@ private suspend fun handleSlackEndpoint(
     val rawBody = call.receiveText()
     val contentType = call.request.contentType()
 
-    if (
-        !SlackRequestVerifier.verify(
-            call.request,
-            rawBody,
-            signingSecret
-        )
-    ) {
+    if (!SlackRequestVerifier.verify(call.request, rawBody, signingSecret)) {
         logger.warn("Invalid Slack request signature")
-        call.respond(
-            HttpStatusCode.Unauthorized,
-            "Invalid Slack signature"
-        )
+        call.respond(HttpStatusCode.Unauthorized, "Invalid Slack signature")
         return
     }
 
@@ -97,10 +89,7 @@ private suspend fun handleSlackEndpoint(
             rawBody.parseUrlEncodedParameters(plusIsSpace = true)
         } catch (e: Exception) {
             logger.warn("Could not parse Slack form body", e)
-            call.respond(
-                HttpStatusCode.BadRequest,
-                "Invalid form body"
-            )
+            call.respond(HttpStatusCode.BadRequest, "Invalid form body")
             return
         }
 
@@ -148,9 +137,7 @@ private suspend fun handleSlackEndpoint(
 
             scope.launch {
                 try {
-                    SlackInteractionHandler.handlePayload(
-                        commandPayload.toString()
-                    )
+                    SlackInteractionHandler.handlePayload(commandPayload)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -165,10 +152,7 @@ private suspend fun handleSlackEndpoint(
         }
 
         logger.warn("Slack form request contained neither payload nor command")
-        call.respond(
-            HttpStatusCode.BadRequest,
-            "Missing Slack payload or command"
-        )
+        call.respond(HttpStatusCode.BadRequest, "Missing Slack payload or command")
         return
     }
 
@@ -190,15 +174,13 @@ private suspend fun handleSlackEndpoint(
 
     when (body["type"]?.jsonPrimitive?.contentOrNull) {
         "url_verification" -> {
-            val challenge =
-                body["challenge"]?.jsonPrimitive?.contentOrNull
+            val challenge = body["challenge"]?.jsonPrimitive?.contentOrNull
 
             if (challenge.isNullOrBlank()) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    "Missing Slack challenge"
-                )
+                logger.warn("Received url verification event, without challenge")
+                call.respond(HttpStatusCode.BadRequest, "Missing Slack challenge")
             } else {
+                logger.info("Received slack challenge $challenge")
                 call.respond(
                     buildJsonObject {
                         put("challenge", challenge)
@@ -211,10 +193,8 @@ private suspend fun handleSlackEndpoint(
             val eventPayload = body["event"] as? JsonObject
 
             if (eventPayload == null) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    "Invalid event payload"
-                )
+                logger.warn("Received slack event callback without event")
+                call.respond(HttpStatusCode.BadRequest, "Invalid event payload")
                 return
             }
 
@@ -222,42 +202,26 @@ private suspend fun handleSlackEndpoint(
 
             scope.launch {
                 try {
-                    when (
-                        eventPayload["type"]
-                            ?.jsonPrimitive
-                            ?.contentOrNull
-                    ) {
+                    when (eventPayload["type"]?.jsonPrimitive?.contentOrNull) {
                         "app_requested" -> {
-                            val requestElement =
-                                eventPayload["app_request"] ?: eventPayload
+                            val requestElement = eventPayload["app_request"] ?: eventPayload
 
                             val appRequested =
-                                SharedData.json.decodeFromJsonElement(
-                                    AppRequested.serializer(),
-                                    requestElement
-                                )
+                                SharedData.json.decodeFromJsonElement(AppRequested.serializer(), requestElement)
 
                             AppManager.incomingAppRequest(appRequested)
                         }
 
                         "app_home_opened" -> {
-                            val userId =
-                                eventPayload["user"]
-                                    ?.jsonPrimitive
-                                    ?.contentOrNull
+                            val userId = eventPayload["user"]?.jsonPrimitive?.contentOrNull
 
                             if (!userId.isNullOrBlank()) {
-                                SlackWorkflowService.handleAppHomeOpened(
-                                    userId
-                                )
+                                SlackWorkflowService.handleAppHomeOpened(userId)
                             }
                         }
 
                         else -> {
-                            logger.debug(
-                                "Ignoring Slack event type: {}",
-                                eventPayload["type"]
-                            )
+                            logger.warn("Unknown Slack event type: ${eventPayload["type"]}")
                         }
                     }
                 } catch (e: CancellationException) {
@@ -283,10 +247,7 @@ private suspend fun handleSlackEndpoint(
         }
 
         else -> {
-            logger.debug(
-                "Ignoring Slack request type: {}",
-                body["type"]
-            )
+            logger.warn("Unknown Slack request type: ${body["type"]}")
             call.respond(HttpStatusCode.OK)
         }
     }

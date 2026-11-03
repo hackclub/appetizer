@@ -26,11 +26,13 @@ object SlackInteractionHandler {
         try {
             val type = type ?: jsonObject["type"]?.jsonPrimitive?.content ?: return
 
+            logger.info("Received slack payload of type $type")
+
             when (type) {
                 "block_actions" -> handleBlockActions(jsonObject)
                 "view_submission" -> handleViewSubmission(jsonObject)
                 "slash_commands" -> handleSlashCommands(jsonObject)
-                else -> logger.info("Unhandled Slack interaction type: $type")
+                else -> logger.warn("Unhandled Slack interaction type: $type")
             }
         } catch (e: Exception) {
             logger.error("Error processing Slack interaction payload", e)
