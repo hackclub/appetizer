@@ -1,7 +1,7 @@
 package com.fantamomo.slack.approver.app
 
-import io.github.flaxoos.ktor.server.plugins.ratelimiter.*
-import io.github.flaxoos.ktor.server.plugins.ratelimiter.implementations.*
+import io.github.flaxoos.ktor.server.plugins.ratelimiter.RateLimiting
+import io.github.flaxoos.ktor.server.plugins.ratelimiter.implementations.TokenBucket
 import io.ktor.server.application.*
 import io.ktor.server.routing.*
 import kotlin.time.Duration.Companion.seconds

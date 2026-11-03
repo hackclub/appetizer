@@ -12,4 +12,5 @@
     <logger name="io.r2dbc" level="INFO"/>
     <logger name="io.netty" level="INFO"/>
     <logger name="Exposed" level="INFO"/>
+    <logger name="io.github.flaxoos.ktor.server.plugins.ratelimiter" level="INFO"/>
 </configuration>
