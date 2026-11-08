@@ -7,12 +7,15 @@ import org.slf4j.LoggerFactory
 // the entry point in the application
 fun main(args: Array<String>) {
     val logger = LoggerFactory.getLogger("main")
+    logger.info("Starting application")
 
-    try {
-        Config.init()
-    } catch (e: Exception) {
-        logger.error("Error loading config", e)
-        return
+    if (!App.onlyServer) {
+        try {
+            Config.init()
+        } catch (e: Exception) {
+            logger.error("Error loading config", e)
+            return
+        }
     }
 
     runBlocking {

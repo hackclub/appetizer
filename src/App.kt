@@ -35,6 +35,9 @@ object App {
 
     private suspend fun run() = coroutineScope {
         if (onlyServer) {
+            logger.info("Running in only server mode")
+            logger.info("Only the server is started for the slack url verification")
+            logger.info("Set 'ONLY_SERVER' to false after finishing the slack app setup")
             val port = System.getenv("SERVER_PORT")?.toIntOrNull() ?: 80
             val host = System.getenv("SERVER_HOST") ?: "0.0.0.0"
             val server = embeddedServer(
@@ -61,6 +64,10 @@ object App {
                     "approving/cancel/restricting apps in following workspaces: ${SharedData.workspaces.joinToString(", ")}"
         )
 
+        if (SharedData.workspaces.isEmpty()) {
+            logger.warn("The bot has no access to any workspace, you need at least one so that we can set the review messages")
+        }
+
         try {
             DatabaseManager.init()
         } catch (e: Exception) {
@@ -78,6 +85,7 @@ object App {
         launch { SettingsManager.run() }
 
         if (Config.SOCKET_MODE) {
+            logger.info("Using socket mode. We recommend using HTTP mode in production.")
             launch {
                 SlackManager.connectViaSocket()
             }
@@ -257,7 +265,7 @@ object App {
     ): JsonObject? {
         val (jsonObject, response) = checkToken(token, dCookie = dCookie) ?: return null
         if (requiredScopes == null) return jsonObject
-        val scopeHeaders = response.headers["x-oauth-scopes"]
+        val scopeHeaders = response.headers["x-oauth-scopes"] // slack returns all granted scopes in this header
         if (scopeHeaders == null) {
             logger.error("No scope headers found for token $token")
             return null
@@ -271,7 +279,7 @@ object App {
             logger.error("Token ${maskSlackToken(token)} is missing required scopes: $scopeSummary")
             return null
         }
-        val unnecessaryScopes = scopes.filter { it !in requiredScopes }.filter { it != "identify" }
+        val unnecessaryScopes = scopes.filter { it !in requiredScopes }.filter { it != "identify" } // ignore identify, because every user token has it
         if (unnecessaryScopes.isNotEmpty()) {
             logger.warn("Token ${maskSlackToken(token)} " +
                     "has unnecessary scopes: ${unnecessaryScopes.joinToString(", ")}")
@@ -303,7 +311,7 @@ object App {
                 if (dCookie != null && !rawTry && error == "invalid_auth") {
                     logger.warn("Invalid auth error, retrying with raw Cookie header")
                     // if you straight copy the dCookie from the it network tab, it might not work because it is URL encoded,
-                    // but the cookie function which we use to pass the cooke to the server, also encodes it,
+                    // but the cookie function which we use to pass the cookie to the server, also encodes it,
                     // so now it is encoded two times and the server will reject it,
                     // for that reason we try again with the raw Cookie header
                     return checkToken(token, dCookie = null, rawTry = true)
