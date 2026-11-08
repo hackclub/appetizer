@@ -13,6 +13,7 @@ import org.jetbrains.exposed.v1.r2dbc.*
 import org.slf4j.LoggerFactory
 import kotlin.time.Clock
 
+// has methods to store, retrieve and many more things for the install request table
 object InstallRequestRepository {
 
     private val logger = LoggerFactory.getLogger(InstallRequestRepository::class.java)

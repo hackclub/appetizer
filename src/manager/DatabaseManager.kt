@@ -20,6 +20,7 @@ import kotlin.coroutines.Continuation
 import kotlin.time.Clock
 import kotlin.time.measureTime
 
+// manges the Database and executes migrations
 object DatabaseManager {
 
     private const val MIGRATION_FOLDER_PATH = "db/migrations"
@@ -291,6 +292,7 @@ object DatabaseManager {
         return result.distinct().sorted()
     }
 
+    // has methods which will be executed after the SQL migrations
     @Suppress("FunctionName", "unused")
     private object SoftwareMigrations {
 

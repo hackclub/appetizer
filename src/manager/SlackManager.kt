@@ -25,6 +25,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
+// manger for managing slack things
 object SlackManager {
 
     private val logger = LoggerFactory.getLogger(SlackManager::class.java)

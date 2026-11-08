@@ -9,6 +9,27 @@ import kotlin.contracts.InvocationKind
 import kotlin.contracts.contract
 import kotlin.time.Duration.Companion.milliseconds
 
+/**
+ * Coordinates execution of suspending operations while keeping their start rate within a fixed
+ * per-minute limit.
+ *
+ * Requests are queued until a permit is available. Normal-priority requests are processed before
+ * low-priority requests, while preserving FIFO order within each priority queue. Only one permitted
+ * block is allowed to run at a time; the next queued request is considered only after the current
+ * block completes.
+ *
+ * The rate limit is enforced over a rolling 60-second window based on the time each block is
+ * permitted to start. When the limit has been reached, queued requests are delayed until the oldest
+ * recorded request leaves the window.
+ *
+ * The internal scheduler is launched in the supplied coroutine scope. Call `close` when this
+ * instance is no longer needed to cancel the scheduler and close its wake-up channel.
+ *
+ * @param maxRequestsPerMinute the maximum number of requests that may be started in any rolling
+ * 60-second window.
+ * @param scope the coroutine scope used to run the internal scheduler.
+ * @throws IllegalArgumentException if `maxRequestsPerMinute` is not greater than zero.
+ */
 class RateLimitAvoider(
     private val maxRequestsPerMinute: Int,
     scope: CoroutineScope = CoroutineScope(Dispatchers.Default)

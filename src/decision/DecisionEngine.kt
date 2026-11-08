@@ -2,6 +2,20 @@ package com.fantamomo.slack.approver.decision
 
 import com.fantamomo.slack.approver.model.*
 
+// The main class that decides whether a request should be approved, denied, or forwarded for manual review.
+//
+// It follows these rules:
+// 1. If Slack has already resolved the request through automation, we cannot do anything
+// 2. If the application is restricted, the request is denied.
+// 3. If the request is for an enterprise-wide installation, the request is denied and requires manual approval.
+// 4. If an identical request (with the same scopes) was previously denied and has not been undone, the request is denied again.
+// 5. If the application requests a command that is already registered by another application, the request is denied.
+// 6. Each requested scope is evaluated against the configured scope rules, taking rule precedence and the user's verification status into account.
+// 7. If all restricted scopes in the request were previously approved for the user, the request is automatically approved.
+// 8. If the request contains at least one blocked scope, the request is denied.
+// 9. If the request contains at least one scope requiring manual review, the request is forwarded for review.
+// 10. If the user is unverified and requests scopes that are not explicitly allowed for unverified users, the request is denied.
+// 11. Otherwise, the request is automatically approved.
 object DecisionEngine {
 
     fun evaluate(context: DecisionContext): DecisionResult {
@@ -63,6 +77,7 @@ object DecisionEngine {
 
         val commandsInUse = context.commandsAllReadyInUse
 
+        // 5. if any command of the app is already in use be another app, we decline
         if (commandsInUse.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.DENIED,
@@ -72,7 +87,7 @@ object DecisionEngine {
             )
         }
 
-        // 5. check all the scopes using rule evaluation
+        // 6. check all the scopes using rule evaluation
         val blockedScopes = mutableListOf<String>()
         val reviewScopes = mutableListOf<String>()
         val unallowedForUnverifiedScopes = mutableListOf<String>()
@@ -110,7 +125,7 @@ object DecisionEngine {
 
         if (previousApprovedRequests.isNotEmpty()) {
             val newlyRestrictedScopes = allNonAllowedScopes.filter { scope -> !previouslyApprovedScopeNames.contains(scope.lowercase()) }
-            // 6. if the request has been previously approved with some restricted scopes, but no new restricted scopes, approve the request
+            // 7. if the request has been previously approved with some restricted scopes, but no new restricted scopes, approve the request
             if (newlyRestrictedScopes.isEmpty()) {
                 if (context.isUserVerified) {
                     return DecisionResult(
@@ -128,7 +143,7 @@ object DecisionEngine {
             }
         }
 
-        // 7. if the request contains at least one blocked scope, deny the request
+        // 8. if the request contains at least one blocked scope, deny the request
         if (blockedScopes.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.DENIED,
@@ -139,7 +154,7 @@ object DecisionEngine {
             )
         }
 
-        // 8. if the request contains reviewable scopes, send to manual review
+        // 9. if the request contains reviewable scopes, send to manual review
         if (reviewScopes.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.PENDING_REVIEW,
@@ -150,7 +165,7 @@ object DecisionEngine {
             )
         }
 
-        // 9. if the user is unverified and has scopes not explicitly allowed, deny
+        // 10. if the user is unverified and has scopes not explicitly allowed, deny
         if (unallowedForUnverifiedScopes.isNotEmpty()) {
             return DecisionResult(
                 status = RequestStatus.DENIED,
@@ -161,7 +176,7 @@ object DecisionEngine {
             )
         }
 
-        // 10. approve the request
+        // 11. approve the request
         return if (context.isUserVerified) {
             DecisionResult(
                 status = RequestStatus.APPROVED,

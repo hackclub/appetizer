@@ -31,6 +31,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
+// manager to cache and store verifications status
 object VerificationManager {
     private val logger = LoggerFactory.getLogger(VerificationManager::class.java)
 

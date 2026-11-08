@@ -11,6 +11,7 @@ import io.ktor.http.*
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 
+// handler for managing interactions from slack and response to them
 object SlackInteractionHandler {
     private val logger = LoggerFactory.getLogger(SlackInteractionHandler::class.java)
 

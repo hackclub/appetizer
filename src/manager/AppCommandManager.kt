@@ -63,6 +63,14 @@ object AppCommandManager {
         requireValid()
         while (true) {
             try {
+                // the client.appCommand api is really confusing:
+                // slack commands are not namespaced, so if multiply apps register the same command
+                // the most recently installed app takes precedence (see https://docs.slack.dev/interactivity/implementing-slash-commands#naming_your_command)
+                // the problem is that this api does not reflect that, often it tells that command X is owned by App Y
+                // but App Z was the last installation and every execution of X goes to Z
+                // you even can see that if you install two apps with the same command,
+                // slack will still show the first app in the command completion
+                // how to fix it: i dont know, until that there may are false positives
                 val response = SharedData.httpClient.get("https://slack.com/api/client.appCommands") {
                     parameter("token", Config.SLACK_CLIENT_TOKEN)
                     if (SharedData.rawDCookie) {
@@ -200,7 +208,7 @@ object AppCommandManager {
         // the problem is there is no (official) API for this,
         // so we use two unofficial APIs, which don't have documentations,
         // I experimented with those apis, and sometimes it returns the "slash_commands" list, but not always,
-        // often I got an empty list on apps that clearly had slash commands
+        // often I got an empty list on apps that clearly have slash commands
         // so I dont know how to handle this
         // TODO: figure this out
 

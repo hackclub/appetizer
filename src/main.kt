@@ -4,6 +4,7 @@ import com.fantamomo.slack.approver.data.Config
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 
+// the entry point in the application
 fun main(args: Array<String>) {
     val logger = LoggerFactory.getLogger("main")
 

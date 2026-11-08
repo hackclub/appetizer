@@ -3,6 +3,7 @@ package com.fantamomo.slack.approver.data
 import com.fantamomo.slack.approver.App
 import com.fantamomo.slack.approver.utils.RateLimitAvoider
 
+// collections of RateLimitAvoider instances to ... well avoid rate limits
 object RateLimits {
     val ADMIN_APPS_REQUESTS_LIST = create(20)
     val ADMIN_APPS_REQUESTS_CANCEL = create(20)

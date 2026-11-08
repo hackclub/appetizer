@@ -5,6 +5,7 @@ import com.fantamomo.slack.approver.utils.enumerationByDynamicName
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.datetime.timestamp
 
+// the MAIN table, stores every request we got and progressed
 object InstallRequestTable : Table("install_request") {
 
     val requestId = varchar("request_id", 20)

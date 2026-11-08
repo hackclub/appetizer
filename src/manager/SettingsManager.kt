@@ -11,6 +11,7 @@ import org.jetbrains.exposed.v1.r2dbc.update
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.seconds
 
+// manager for the settings table
 object SettingsManager {
     const val MAX_SETTINGS_NAME_LENGTH = 24
     const val MAX_SETTINGS_VALUE_LENGTH = 64

@@ -3,6 +3,7 @@ package com.fantamomo.slack.approver.db
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.datetime.timestamp
 
+// stores the previous resolution we got from slack
 object InstallRequestPreviousResolutionTable : Table(
     "install_request_previous_resolution"
 ) {
@@ -11,13 +12,18 @@ object InstallRequestPreviousResolutionTable : Table(
 
     val status = varchar("status", 30)
 
-    val resolvedByType = varchar("resolved_by_type", 30).nullable()
-    val resolvedById = varchar("resolved_by_id", 20).nullable()
+    val resolvedByType = varchar("resolved_by_type", 30)
+        .nullable()
 
-    val resolvedAt = timestamp("resolved_at").nullable()
+    val resolvedById = varchar("resolved_by_id", 20)
+        .nullable()
+
+    val resolvedAt = timestamp("resolved_at")
+        .nullable()
 
     // scopes in tokenType:name format separated by comma
-    val rawScopes = text("raw_scopes").nullable()
+    val rawScopes = text("raw_scopes")
+        .nullable()
 
     override val primaryKey = PrimaryKey(requestId)
 }

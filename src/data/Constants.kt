@@ -6,6 +6,7 @@ object Constants {
 
     const val MARKETPLACE_URL = "https://slack.com/marketplace/"
 
+    // a list of dangerous domains
     val DANGEROUS_DOMAINS = listOf(
         // slack domains
         "slack.com",
@@ -17,6 +18,7 @@ object Constants {
         "dinosaurbbq.org",
         "hack.af",
         "hack.club",
+        // no hackclub.app because subdomains are giving to members
 //        "hackclub.app",
         "hackclub.com",
         "hackclub.community",

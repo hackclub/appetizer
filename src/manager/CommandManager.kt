@@ -10,6 +10,7 @@ import io.ktor.http.*
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 
+// handles the slack /app-approver command for managing team members and scope restricting (which is deprecated)
 object CommandManager {
     private val logger = LoggerFactory.getLogger(CommandManager::class.java)
 

@@ -8,6 +8,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.datetime.CurrentTimestamp
 import org.jetbrains.exposed.v1.datetime.timestamp
 
+// the table which stores all the rules for scopes
 object ScopeRulesTable : Table("scope_rules") {
     val id = long("id").autoIncrement()
 

@@ -4,6 +4,15 @@ import com.slack.api.model.kotlin_extension.block.composition.dsl.RichTextObject
 
 private val regex = Regex(":(\\w+):|<@([UW]\\w+)>")
 
+/**
+ * Adds the supplied markdown-like text to this rich text object.
+ *
+ * Recognized tokens are converted into rich text elements, such as emoji and user mentions,
+ * while all unmatched content is added as plain text in its original order.
+ * Empty input is ignored.
+ *
+ * @param text the markdown-like text to append to this rich text object
+ */
 fun RichTextObjectDsl.addMarkdown(text: String) {
     if (text.isEmpty()) return
 

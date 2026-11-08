@@ -2,6 +2,7 @@ package com.fantamomo.slack.approver.db
 
 import org.jetbrains.exposed.v1.core.Table
 
+// table to store all commands and which are active
 object AppCommandsTable : Table("app_commands") {
     val command = varchar("command", 32) // slacks max length is 32 (with the slash)
     val app = varchar("app", 20)

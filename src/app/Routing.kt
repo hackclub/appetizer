@@ -25,6 +25,10 @@ private object Routing
 private val logger = LoggerFactory.getLogger(Routing::class.java)
 
 fun Application.configureRouting() {
+    // Config.SIGNING_SECRET only throws if the Config was not initialized.
+    // there are currently only two ways to achieve this
+    // 1. if 'ONLY_SERVER' is 'true'
+    // 2. or if i run junit tests (there are not commited)
     val slackSigningSecret =
         runCatching { Config.SIGNING_SECRET }.getOrNull()
             ?: System.getenv("SIGNING_SECRET")
@@ -33,9 +37,9 @@ fun Application.configureRouting() {
     routing {
         get("/") {
             call.respondRedirect("https://github.com/hackclub/appetizer", permanent = false)
-//            call.respondText("OK", status = HttpStatusCode.OK)
         }
 
+        // you can point slack at any of those endpoints for events, command and interactions and it just works
         post("/slack/events") {
             handleSlackEndpoint(
                 call = call,
@@ -75,18 +79,26 @@ private suspend fun handleSlackEndpoint(
     scope: CoroutineScope,
     signingSecret: String
 ) {
+    // we need the raw body for the slack verifications
     val rawBody = call.receiveText()
     val contentType = call.request.contentType()
 
     if (!SlackRequestVerifier.verify(call.request, rawBody, signingSecret)) {
+        // well, it was not slack
         logger.warn("Invalid Slack request signature")
         call.respond(HttpStatusCode.Unauthorized, "Invalid Slack signature")
         return
     }
 
     if (contentType.match(ContentType.Application.FormUrlEncoded)) {
+        // there are two possible things:
+        // 1. interactions (https://docs.slack.dev/interactivity/handling-user-interaction#setup)
+        // 2. slash commands (https://docs.slack.dev/interactivity/implementing-slash-commands#app_command_handling)
         val params = try {
-            rawBody.parseUrlEncodedParameters(plusIsSpace = true)
+            rawBody.parseUrlEncodedParameters(
+                // i forget to add that and in all input fields where + instead of spaces
+                plusIsSpace = true
+            )
         } catch (e: Exception) {
             logger.warn("Could not parse Slack form body", e)
             call.respond(HttpStatusCode.BadRequest, "Invalid form body")
@@ -174,6 +186,7 @@ private suspend fun handleSlackEndpoint(
 
     when (body["type"]?.jsonPrimitive?.contentOrNull) {
         "url_verification" -> {
+            // url verification, just respond with the challenge
             val challenge = body["challenge"]?.jsonPrimitive?.contentOrNull
 
             if (challenge.isNullOrBlank()) {
@@ -190,6 +203,7 @@ private suspend fun handleSlackEndpoint(
         }
 
         "event_callback" -> {
+            // events (app_requested or app_home_opened)
             val eventPayload = body["event"] as? JsonObject
 
             if (eventPayload == null) {

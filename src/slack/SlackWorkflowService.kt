@@ -28,6 +28,7 @@ import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
+// a tone of functions to help interact which slac
 object SlackWorkflowService {
     private val logger = LoggerFactory.getLogger(SlackWorkflowService::class.java)
 

@@ -6,6 +6,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 
+// helper class to verify requests from slack
 object SlackRequestVerifier {
 
     private const val VERSION = "v0"

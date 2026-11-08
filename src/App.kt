@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory
 import kotlin.system.exitProcess
 import kotlin.time.Clock
 
+// the main class, which is responsibly for starting all other managers
 object App {
     private val logger = LoggerFactory.getLogger(App::class.java)
 
@@ -25,7 +26,7 @@ object App {
     val onlyServer = System.getenv("ONLY_SERVER")?.equals("true", ignoreCase = true) == true
 
     suspend fun start() {
-        // switching to application scope
+        // switching to application scope, so everything is now via the CoroutineScope from scope
         val job = scope.launch {
             run()
         }

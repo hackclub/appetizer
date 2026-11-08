@@ -23,6 +23,7 @@ import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.minutes
 
+// the class which gets the requests, forwards them to other classes
 object AppManager {
     private val logger = LoggerFactory.getLogger(AppManager::class.java)
 

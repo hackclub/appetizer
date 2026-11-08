@@ -17,6 +17,10 @@ import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import java.io.EOFException
 
+// we the following apis to gather as much information as possible
+// 1. https://slack.com/api/apps.profile.get
+// 2. https://slack.com/marketplace/
+// I tried some more, but those two give all required infos
 object AppInfoManager {
     private val logger = LoggerFactory.getLogger(AppInfoManager::class.java)
     private const val CACHE_EXPIRATION_TIME = 1000L * 60L * 5L // 5 minutes
