@@ -91,18 +91,39 @@ object SlackInteractionHandler {
                 "user_check_verification" -> handleUserCheckVerification(userId, value)
                 "user_request_review" -> handleUserRequestReview(userId, value)
                 "user_withdraw_request" -> handleUserWithdrawRequest(userId, value)
-                "home_team" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.TEAM, updateHome = false)
-                "home_admin" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.ADMIN, updateHome = false)
+                "home_team" -> SlackWorkflowService.setHomeView(
+                    userId,
+                    SlackWorkflowService.HomeView.TEAM,
+                    updateHome = false
+                )
+
+                "home_admin" -> SlackWorkflowService.setHomeView(
+                    userId,
+                    SlackWorkflowService.HomeView.ADMIN,
+                    updateHome = false
+                )
+
                 "admin_add_scope_rule" -> handleAdminAddScopeRule(userId, triggerId)
                 "admin_edit_scope_rule" -> handleAdminEditScopeRule(userId, value, triggerId)
                 "admin_toggle_scope_rule" -> handleAdminToggleScopeRule(userId, value)
                 "admin_delete_scope_rule" -> handleAdminDeleteScopeRule(userId, value, triggerId)
-                "home_requests" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.REQUESTS, updateHome = false)
-                "home_info" -> SlackWorkflowService.setHomeView(userId, SlackWorkflowService.HomeView.INFO, updateHome = false)
+                "home_requests" -> SlackWorkflowService.setHomeView(
+                    userId,
+                    SlackWorkflowService.HomeView.REQUESTS,
+                    updateHome = false
+                )
+
+                "home_info" -> SlackWorkflowService.setHomeView(
+                    userId,
+                    SlackWorkflowService.HomeView.INFO,
+                    updateHome = false
+                )
+
                 "admin_test_scope" -> SlackWorkflowService.openScopeTestModal(userId, triggerId)
                 "admin_test_clear" -> SlackWorkflowService.clearScopeTest(userId)
                 "admin_rule_menu" -> {
-                    val selected = action["selected_option"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: continue
+                    val selected =
+                        action["selected_option"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: continue
                     val (op, id) = selected.split(":", limit = 2)
                     when (op) {
                         "edit" -> handleAdminEditScopeRule(userId, id, triggerId)
@@ -124,29 +145,23 @@ object SlackInteractionHandler {
         userId: String,
         requestId: String,
         stateId: String?,
-        triggerId: String?,
+        triggerId: String,
         fromModal: Boolean = false
     ) {
-        require(triggerId != null || fromModal) { "triggerId must be provided when fromModal is false" }
         if (!InstallRequestRepository.isTeamMemberAuthorized(userId)) {
             logger.warn("User $userId is not authorized to approve request $requestId")
-            if (triggerId != null) {
-                openUnauthorizedError(triggerId)
-            }
+            openUnauthorizedError(triggerId)
             return
         }
 
         val record = InstallRequestRepository.getRequest(requestId) ?: return
         if (stateId != record.stateId) {
             logger.warn("State ID mismatch for request $requestId of $userId ($stateId != ${record.stateId})")
-            if (triggerId != null) {
-                openStateMismatchError(triggerId)
-            }
+            openStateMismatchError(triggerId)
             return
         }
 
         if (record.userId == userId && !fromModal) {
-            require(triggerId != null) { "triggerId must be provided when fromModal is false" }
             if (Config.ALLOW_APPROVING_OWN) {
                 val view = buildAreYouSureModal(
                     title = "Are you sure?",
@@ -269,7 +284,13 @@ object SlackInteractionHandler {
         executeRestrict(userId, requestId, stateId, null, triggerId)
     }
 
-    private suspend fun handleReviewUndo(userId: String, requestId: String, stateId: String?, triggerId: String) {
+    private suspend fun handleReviewUndo(
+        userId: String,
+        requestId: String,
+        stateId: String?,
+        triggerId: String,
+        fromModal: Boolean = false
+    ) {
         if (!InstallRequestRepository.isTeamMemberAuthorized(userId)) {
             logger.warn("User $userId is not authorized to undo resolution for request $requestId")
             openUnauthorizedError(triggerId)
@@ -288,6 +309,19 @@ object SlackInteractionHandler {
             logger.warn("State ID mismatch for request $requestId: expected $stateId, got ${record.stateId}")
             openStateMismatchError(triggerId)
             return
+        }
+
+        if (!fromModal) {
+            val view = buildAreYouSureModal(
+                title = "Are you sure?",
+                callbackId = "request_undo_sure",
+                message = ":warning: This clears the resolution of the app and any previous approvals or denials are undone",
+                metadata = stateId?.let { "$requestId:$it" } ?: requestId,
+            )
+
+            val opened = SlackManager.openView(triggerId, view)
+            if (opened) return
+            logger.warn("Could not opened view, just clearing ")
         }
 
         SlackManager.clearResolution(record.appId, record.teamId, record.enterpriseId)
@@ -349,6 +383,7 @@ object SlackInteractionHandler {
         val triggerId = json["trigger_id"]?.jsonPrimitive?.contentOrNull
         if (triggerId == null) {
             logger.warn("Missing trigger_id in view submission: $json")
+            return
         }
         val view = json["view"]?.jsonObject ?: return
         val callbackId = view["callback_id"]?.jsonPrimitive?.content ?: return
@@ -371,6 +406,11 @@ object SlackInteractionHandler {
                     logger.warn("Received request_owner_approve callback from user $userId, but ALLOW_APPROVING_OWN is false")
                 }
             }
+
+            "request_undo_sure" -> {
+                handleReviewUndo(userId, requestId, stateId, triggerId, fromModal = true)
+            }
+
             "modal_scope_rule_submit" -> executeScopeRuleSubmit(userId, view, privateMetadata, triggerId)
             "modal_delete_scope_rule_submit" -> executeDeleteScopeRuleSubmit(userId, privateMetadata, triggerId)
             "modal_scope_test_submit" -> {
@@ -795,7 +835,8 @@ object SlackInteractionHandler {
 
         val description = extractInputValue(values, "description_block", "description_input")?.trim()
 
-        val publicDescription = extractInputValue(values, "public_description_block", "public_description_input")?.trim()
+        val publicDescription =
+            extractInputValue(values, "public_description_block", "public_description_input")?.trim()
 
         val existingId = privateMetadata.toLongOrNull()
         if (existingId != null && existingId > 0) {
