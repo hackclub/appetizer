@@ -31,9 +31,7 @@ data class ScopeRule(
             RuleUserTarget.VERIFIED -> isVerified
             RuleUserTarget.UNVERIFIED -> !isVerified
         }
-        if (!userMatches) return false
-
-        return matcher.match(scopeName.trim())
+        return userMatches && matcher.match(scopeName.trim())
     }
 }
 

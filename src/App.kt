@@ -277,6 +277,7 @@ object App {
     ): JsonObject? {
         val (jsonObject, response) = checkToken(token, dCookie = dCookie) ?: return null
         if (requiredScopes == null) return jsonObject
+        @Suppress("UastIncorrectHttpHeaderInspection")
         val scopeHeaders = response.headers["x-oauth-scopes"] // slack returns all granted scopes in this header
         if (scopeHeaders == null) {
             logger.error("No scope headers found for token $token")
@@ -322,7 +323,7 @@ object App {
                 val error = (jsonObject["error"] as? JsonPrimitive)?.contentOrNull
                 if (dCookie != null && !rawTry && error == "invalid_auth") {
                     logger.warn("Invalid auth error, retrying with raw Cookie header")
-                    // if you straight copy the dCookie from the it network tab, it might not work because it is URL encoded,
+                    // if you straight copy the dCookie from the network tab, it might not work because it is URL encoded,
                     // but the cookie function which we use to pass the cookie to the server, also encodes it,
                     // so now it is encoded two times and the server will reject it,
                     // for that reason we try again with the raw Cookie header

@@ -14,6 +14,7 @@ import com.slack.api.model.kotlin_extension.block.composition.dsl.RichTextObject
  * @param color the Slack tag color value, or null to use the default tag color
  * @param style optional limited rich text styling applied to the tag text
  */
+@Suppress("unused") // all properties are used by gson
 class RichTextTagElement(
     val text: String,
     val color: String? = null,

@@ -242,7 +242,7 @@ object AppInfoManager {
         while (true) {
             val byte = try {
                 readByte().toInt().toChar()
-            } catch (e: EOFException) {
+            } catch (_: EOFException) {
                 return false
             }
 

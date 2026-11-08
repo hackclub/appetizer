@@ -21,7 +21,7 @@ object InstallRequestScopeTable : Table("install_request_scope") {
         .nullable()
         .comment("The description of the scope (from slack)")
 
-    // this is slack whos says if the scope is sensitive, not we
+    // this is slack who's says if the scope is sensitive, not we
     val sensitive = bool("sensitive")
         .comment("If the scope is sensitive (from slack)")
 

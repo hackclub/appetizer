@@ -43,6 +43,7 @@ object AppCommandManager {
         val error: String? = null
     )
 
+    @Suppress("PropertyName")
     @Serializable
     private data class ResponseCommand(
         val name: String,
@@ -69,8 +70,8 @@ object AppCommandManager {
                 // the problem is that this api does not reflect that, often it tells that command X is owned by App Y
                 // but App Z was the last installation and every execution of X goes to Z
                 // you even can see that if you install two apps with the same command,
-                // slack will still show the first app in the command completion
-                // how to fix it: i dont know, until that there may are false positives
+                // Slack will still show the first app in the command completion
+                // how to fix it: i don't know, until that there may are false positives
                 val response = SharedData.httpClient.get("https://slack.com/api/client.appCommands") {
                     parameter("token", Config.SLACK_CLIENT_TOKEN)
                     if (SharedData.rawDCookie) {
@@ -120,7 +121,7 @@ object AppCommandManager {
                 null -> {
                     // this is new, type can be none existing in the response
                     if (command.app == null && command.name_normalized == null && command.canonical_name == null) {
-                        // i think this happens when an app is deleted, but i dont know, because it is new
+                        // I think this happens when an app is deleted, but i don't know, because it is new
                         ignoredCommands++
                         return@mapNotNull null
                     } else {
@@ -238,7 +239,7 @@ object AppCommandManager {
                     logger.error("Response did not contain slash_commands: $text")
                 } else {
                     // the problem is if slash_commands is empty, that does not mean it have no commands
-                    // yeah, i know kinda bad but it is so
+                    // yeah, I know kinda bad, but it is so
                     if (!slashCommands.isEmpty()) {
                         return slashCommands.mapNotNullTo(mutableListOf()) {
                             try {

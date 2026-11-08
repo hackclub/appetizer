@@ -41,15 +41,15 @@ class RateLimitAvoider(
         }
     }
 
-    private data class Request<T>(
+    private data class Request(
         val low: Boolean,
         val permit: CompletableDeferred<Unit> = CompletableDeferred()
     )
 
     private val mutex = Mutex()
 
-    private val normalQueue = ArrayDeque<Request<*>>()
-    private val lowQueue = ArrayDeque<Request<*>>()
+    private val normalQueue = ArrayDeque<Request>()
+    private val lowQueue = ArrayDeque<Request>()
 
     private val requestTimes = ArrayDeque<Long>()
 
@@ -67,7 +67,7 @@ class RateLimitAvoider(
         block: suspend () -> T
     ): T {
         contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
-        val request = Request<T>(low = low)
+        val request = Request(low = low)
 
         mutex.withLock {
             if (low) {

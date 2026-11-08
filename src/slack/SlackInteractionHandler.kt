@@ -6,7 +6,6 @@ import com.fantamomo.slack.approver.manager.InstallRequestRepository
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
-import com.fantamomo.slack.approver.slack.SlackWorkflowService.buildAreYouSureModal
 import io.ktor.http.*
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
@@ -164,7 +163,7 @@ object SlackInteractionHandler {
 
         if (record.userId == userId && !fromModal) {
             if (Config.ALLOW_APPROVING_OWN) {
-                val view = buildAreYouSureModal(
+                val view = SlackWorkflowService.buildAreYouSureModal(
                     title = "Are you sure?",
                     callbackId = "request_owner_approve",
                     message = ":warning: You requested this app. Are you sure you want to approve your own request?",
@@ -318,7 +317,7 @@ object SlackInteractionHandler {
         }
 
         if (!fromModal) {
-            val view = buildAreYouSureModal(
+            val view = SlackWorkflowService.buildAreYouSureModal(
                 title = "Are you sure?",
                 callbackId = "request_undo_sure",
                 message = ":warning: This clears the resolution of the app and any previous approvals or denials are undone",
@@ -639,7 +638,7 @@ object SlackInteractionHandler {
             )
             return
         } else {
-            // it is denied, but we need to figure out if it is completely denied or still review able, yeah dont ask
+            // it is denied, but we need to figure out if it is completely denied or still review able, yeah don't ask
             if (record.resolution != null) {
                 SlackWorkflowService.sendNotAbleToRequestReviewDm(
                     userId = userId,

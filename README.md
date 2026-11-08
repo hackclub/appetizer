@@ -133,7 +133,7 @@ Slack payloads are received through the HTTP endpoint:
 ```
 
 Set in your Slack app the **Request URL** of `events`, `commands` and `interactions` to `<your-domain>/slack/events`,
-all of them need to point to this url, if they dont, parts of the application will not work.
+all of them need to point to this url, if they don't, parts of the application will not work.
 
 > We do theoretically support Socket Mode, but we do not recommend it, as it was only implemented for development purposes and not tested in production.
 

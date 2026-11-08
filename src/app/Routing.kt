@@ -28,7 +28,7 @@ fun Application.configureRouting() {
     // Config.SIGNING_SECRET only throws if the Config was not initialized.
     // there are currently only two ways to achieve this
     // 1. if 'ONLY_SERVER' is 'true'
-    // 2. or if i run junit tests (there are not commited)
+    // 2. or if I run JUnit tests (there are not commited)
     val slackSigningSecret =
         runCatching { Config.SIGNING_SECRET }.getOrNull()
             ?: System.getenv("SIGNING_SECRET")
@@ -96,7 +96,7 @@ private suspend fun handleSlackEndpoint(
         // 2. slash commands (https://docs.slack.dev/interactivity/implementing-slash-commands#app_command_handling)
         val params = try {
             rawBody.parseUrlEncodedParameters(
-                // i forget to add that and in all input fields where + instead of spaces
+                // I forget to add that and in all input fields where + instead of spaces
                 plusIsSpace = true
             )
         } catch (e: Exception) {

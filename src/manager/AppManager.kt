@@ -36,9 +36,11 @@ object AppManager {
 
     private val domainRegex = Regex("""(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b""")
 
+    @Suppress("PropertyName")
     @Serializable
     private class ResponseMetadata(val next_cursor: String)
 
+    @Suppress("PropertyName")
     @Serializable
     private class Response(val app_requests: List<AppRequested>, val response_metadata: ResponseMetadata?)
 

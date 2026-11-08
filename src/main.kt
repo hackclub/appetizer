@@ -5,7 +5,7 @@ import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 
 // the entry point in the application
-fun main(args: Array<String>) {
+fun main() {
     val logger = LoggerFactory.getLogger("main")
     logger.info("Starting application")
 

@@ -151,56 +151,60 @@ object SlackWorkflowService {
                 }
             }
             actions {
-                if (decision.status == RequestStatus.APPROVED) {
-                    button {
-                        text("Undo", true)
-                        actionId("review_undo")
-                        value(buttonValue)
-                        style("primary")
+                when (decision.status) {
+                    RequestStatus.APPROVED -> {
+                        button {
+                            text("Undo", true)
+                            actionId("review_undo")
+                            value(buttonValue)
+                            style("primary")
+                        }
+                        button {
+                            text("Restrict", true)
+                            actionId("review_restrict")
+                            value(buttonValue)
+                            style("danger")
+                        }
                     }
-                    button {
-                        text("Restrict", true)
-                        actionId("review_restrict")
-                        value(buttonValue)
-                        style("danger")
+                    RequestStatus.DENIED -> {
+                        button {
+                            text("Override (Approve)", true)
+                            actionId("review_approve")
+                            value(buttonValue)
+                            style("primary")
+                        }
+            //                    button {
+            //                        text("Undo", true)
+            //                        actionId("review_undo")
+            //                        value(request.id)
+            //                        style("danger")
+            //                    }
+                        button {
+                            text("Restrict", true)
+                            actionId("review_restrict")
+                            value(buttonValue)
+                            style("danger")
+                        }
                     }
-                } else if (decision.status == RequestStatus.DENIED) {
-                    button {
-                        text("Override (Approve)", true)
-                        actionId("review_approve")
-                        value(buttonValue)
-                        style("primary")
-                    }
-//                    button {
-//                        text("Undo", true)
-//                        actionId("review_undo")
-//                        value(request.id)
-//                        style("danger")
-//                    }
-                    button {
-                        text("Restrict", true)
-                        actionId("review_restrict")
-                        value(buttonValue)
-                        style("danger")
-                    }
-                } else {
-                    button {
-                        text("Approve", true)
-                        actionId("review_approve")
-                        value(buttonValue)
-                        style("primary")
-                    }
-                    button {
-                        text("Deny", true)
-                        actionId("review_deny")
-                        value(buttonValue)
-                        style("danger")
-                    }
-                    button {
-                        text("Restrict", true)
-                        actionId("review_restrict")
-                        value(buttonValue)
-                        style("danger")
+                    else -> {
+                        button {
+                            text("Approve", true)
+                            actionId("review_approve")
+                            value(buttonValue)
+                            style("primary")
+                        }
+                        button {
+                            text("Deny", true)
+                            actionId("review_deny")
+                            value(buttonValue)
+                            style("danger")
+                        }
+                        button {
+                            text("Restrict", true)
+                            actionId("review_restrict")
+                            value(buttonValue)
+                            style("danger")
+                        }
                     }
                 }
             }
@@ -333,22 +337,22 @@ object SlackWorkflowService {
                         style(ListStyle.BULLET)
                         elements {
                             val hadPreviousFinalResolutions = decisionContext.previousRequests.any { it.status.final }
-                            for (scope in request.scopes) {
+                            for ((name, _, _, tokenType, isOptional) in request.scopes) {
                                 richTextSection {
                                     text(
-                                        text = scope.name,
+                                        text = name,
                                         style = TextStyle(
                                             code = true,
-                                            bold = decision.relevantRestrictedScopes.contains(scope.name)
+                                            bold = decision.relevantRestrictedScopes.contains(name)
                                         )
                                     )
-                                    text(" - ${scope.tokenType}")
+                                    text(" - $tokenType")
                                     val attributes = mutableListOf<Pair<String, TagColor>>()
 
-                                    if (scope.isOptional) attributes.add("optional" to TagColor.BROWN)
+                                    if (isOptional) attributes.add("optional" to TagColor.BROWN)
                                     if (hadPreviousFinalResolutions) {
                                         val previousResolution = decisionContext.previousRequests.findLast {
-                                            it.status.final && it.scopes.any { s -> scope.name == s.name && scope.tokenType == s.tokenType }
+                                            it.status.final && it.scopes.any { s -> name == s.name && tokenType == s.tokenType }
                                         }?.status
                                         val statusTag = when (previousResolution) {
                                             RequestStatus.APPROVED -> "approved" to TagColor.GREEN
@@ -357,12 +361,12 @@ object SlackWorkflowService {
                                         }
                                         attributes.add(statusTag)
                                     }
-                                    // we are not using scope.isSensitive, because it set from slack and has nothing to do with our rules
+                                    // we are not using scope.isSensitive, because it set from Slack and has nothing to do with our rules
 //                                    if (scope.isSensitive) attributes.add("sensitive" to TagColor.ORANGE)
 
-                                    for (attribute in attributes) {
+                                    for ((first, second) in attributes) {
                                         text(" ")
-                                        tag("(${attribute.first})", attribute.second)
+                                        tag("($first)", second)
                                     }
                                 }
                             }
@@ -379,17 +383,17 @@ object SlackWorkflowService {
                     richTextList {
                         style(ListStyle.BULLET)
                         elements {
-                            for (cmd in decisionContext.commands) {
+                            for ((name, description) in decisionContext.commands) {
                                 richTextSection {
-                                    text(cmd.name, style = TextStyle(code = true))
-                                    val owner = decision.relevantCommands[cmd.name]
+                                    text(name, style = TextStyle(code = true))
+                                    val owner = decision.relevantCommands[name]
                                     if (!owner.isNullOrEmpty()) {
                                         text(" (Owned by ")
                                         text(owner, style = TextStyle(code = true))
                                         text(")")
                                     }
-                                    if (cmd.description.isNotEmpty()) {
-                                        text("\n${cmd.description}")
+                                    if (description.isNotEmpty()) {
+                                        text("\n$description")
                                     }
                                 }
                             }
@@ -711,7 +715,7 @@ object SlackWorkflowService {
                     }
 
                     RequestDecisionReason.SLACK_AUTOMATION -> {
-                        // dont send a message, slack automation already notified the user
+                        // don't send a message, slack automation already notified the user
                     }
 
                     RequestDecisionReason.COMMAND_ALREADY_IN_USE -> {
@@ -1220,12 +1224,12 @@ object SlackWorkflowService {
         if (tabs.size < 2) return
 
         actions {
-            for (tab in tabs) {
+            for ((view, label, actionId) in tabs) {
                 button {
-                    text(tab.label, true)
-                    actionId(tab.actionId)
-                    value(tab.view.name.lowercase())
-                    if (tab.view == current) style("primary")
+                    text(label, true)
+                    actionId(actionId)
+                    value(view.name.lowercase())
+                    if (view == current) style("primary")
                 }
             }
         }

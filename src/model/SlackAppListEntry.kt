@@ -1,3 +1,5 @@
+@file:Suppress("PropertyName")
+
 package com.fantamomo.slack.approver.model
 
 import kotlinx.serialization.Serializable

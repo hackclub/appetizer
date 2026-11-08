@@ -92,9 +92,9 @@ object DecisionEngine {
         val reviewScopes = mutableListOf<String>()
         val unallowedForUnverifiedScopes = mutableListOf<String>()
 
-        for (requestedScope in context.request.scopes) {
-            val scopeName = requestedScope.name.trim()
-            val tokenType = requestedScope.tokenType.trim()
+        for ((name, _, _, tokenType1) in context.request.scopes) {
+            val scopeName = name.trim()
+            val tokenType = tokenType1.trim()
 
             val matchingRules = context.scopeRules.filter { rule ->
                 rule.matches(scopeName, tokenType, context.isUserVerified)
@@ -127,14 +127,14 @@ object DecisionEngine {
             val newlyRestrictedScopes = allNonAllowedScopes.filter { scope -> !previouslyApprovedScopeNames.contains(scope.lowercase()) }
             // 7. if the request has been previously approved with some restricted scopes, but no new restricted scopes, approve the request
             if (newlyRestrictedScopes.isEmpty()) {
-                if (context.isUserVerified) {
-                    return DecisionResult(
+                return if (context.isUserVerified) {
+                    DecisionResult(
                         status = RequestStatus.APPROVED,
                         reason = RequestDecisionReason.USER_VERIFIED,
                         explanation = "Request automatically approved: all requested restricted scopes were previously approved for this user."
                     )
                 } else {
-                    return DecisionResult(
+                    DecisionResult(
                         status = RequestStatus.APPROVED,
                         reason = RequestDecisionReason.USER_UNVERIFIED_ALLOWED_SCOPES,
                         explanation = "Request automatically approved: all requested scopes were previously approved."

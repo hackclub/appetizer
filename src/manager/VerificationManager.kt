@@ -68,8 +68,8 @@ object VerificationManager {
     suspend fun handleUserBecameVerified(userId: String) {
         val pendingRequests = InstallRequestRepository.findPendingOrBlockedRequestsForUser(userId)
         if (AppInfoManager.canBeUsed()) {
-            for (request in pendingRequests) {
-                AppInfoManager.removeFromCache(request.appId)
+            for ((_, appId) in pendingRequests) {
+                AppInfoManager.removeFromCache(appId)
             }
         }
         for (record in pendingRequests) {
@@ -316,7 +316,7 @@ object VerificationManager {
         return provider
     }
 
-    // maybe i overreacted with the try-cache's in the following function
+    // maybe I overreacted with the try-cache's in the following function
     private suspend fun checkProvider(userId: String): VerificationStatus {
         val response = try {
             RateLimits.AUTH_CHECK.withLimit {
@@ -371,7 +371,7 @@ object VerificationManager {
             SharedData.httpClient.get(ALT_CHECK) {
                 parameter("slack_id", userId)
             }
-        } catch (e: ConnectException) {
+        } catch (_: ConnectException) {
             logger.warn("Failed to connect to $ALT_CHECK")
             return false to ""
         } catch (e: CancellationException) {

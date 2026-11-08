@@ -135,19 +135,19 @@ object CommandManager {
         }
         val text = buildString {
             append("*Scope Rules (${rules.size}):*\n")
-            for (rule in rules) {
-                val statusBadge = if (rule.enabled) ":white_check_mark:" else ":double_vertical_bar:"
-                val actionBadge = when (rule.action) {
+            for ((id, pattern, action, userTarget, scopeType, enabled) in rules) {
+                val statusBadge = if (enabled) ":white_check_mark:" else ":double_vertical_bar:"
+                val actionBadge = when (action) {
                     RuleAction.ALLOW -> "*ALLOW*"
                     RuleAction.REVIEW -> "*REVIEW*"
                     RuleAction.BLOCK -> "*BLOCK*"
                 }
-                val targetLabel = when (rule.userTarget) {
+                val targetLabel = when (userTarget) {
                     RuleUserTarget.ALL -> "Everyone"
                     RuleUserTarget.VERIFIED -> "Verified Users"
                     RuleUserTarget.UNVERIFIED -> "Unverified Users"
                 }
-                append("$BULLET $statusBadge `#${rule.id}` `${rule.pattern}` [${rule.scopeType}] → $actionBadge for *$targetLabel*\n")
+                append("$BULLET $statusBadge `#$id` `$pattern` [$scopeType] → $actionBadge for *$targetLabel*\n")
             }
         }
         reply(url, text.trim())
