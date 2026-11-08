@@ -80,30 +80,12 @@ Restrictions and team members can be managed with the `/app-approver` command. T
 
 #### Scopes
 
-| Command                                      | Description                                     |
-|----------------------------------------------|-------------------------------------------------|
-| `scopes`                                     | Lists the current restricted/allowed scopes     |
-| `scopes allow <scope> [type]`                | Allows a scope for verified users               |
-| `scopes allow-unverified <scope> [type]`     | Allows a scope even for unverified users        |
-| `scopes restrict <scope> [type] [review]`    | Restricts a scope                               |
-| `scopes reset <scope> [type]`                | Removes the configuration of a scope            |
+While it is still possible to set and change the scopes via the `/app-approver` command, it is not recommend and now deprecated.
 
-**Arguments**
+If you still want to use it, open the git history and find the lines, which are now deleted.
 
-- `<scope>`: The scope to match
-  - Can be the scope itself, to match only it, e.g.: `chat:write`
-  - But can also be a pattern like `admin.*` to match all scopes starting with `admin.` or `*:read` to match all scopes ending with `:read`
-  - If it starts with `/` we will remove the `/` and interpret the rest as a regex pattern.
-  - Note: The matching also has specificity. That means if you disallow all `chat:*`, and then allow `chat:write`. The `chat:write` will be allowed because it is more specific.
-  - Only `*` means all scopes. (And has the lowest specificity)
-- `[type]`: The type of the scope.
-  - `BOT`: Only bot scopes.
-  - `USER`: Only user scopes.
-  - `BOTH`: Both user and bot scopes.
-- `[review]`: Whether the scope should be reviewed by an admin.
-  - `true`: The scope should be reviewed, and thus will be forwarded to the team
-  - `false`: The scope will instantly be denied.
-  - This can only be used with `scopes restrict`
+But there is a better system. Open the App Home and go to `Admin` (you need to be on the `admin.users` list).
+There you have a much nicer UI for all the scopes. It is pretty self explaining, but you can add scopes via the `Add scope` button.
 
 **Behavior**
 
