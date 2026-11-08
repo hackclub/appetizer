@@ -1,5 +1,6 @@
 package com.fantamomo.slack.approver.manager
 
+import com.fantamomo.slack.approver.data.Config
 import com.fantamomo.slack.approver.db.*
 import com.fantamomo.slack.approver.model.*
 import com.fantamomo.slack.approver.utils.randomString
@@ -385,6 +386,7 @@ object InstallRequestRepository {
                 resolvedAt = row[InstallRequestTable.resolvedAt],
                 resolutionMessage = row[InstallRequestTable.resolutionMessage],
                 resolution = row[InstallRequestTable.resolution],
+                reviewChannelId = row[InstallRequestTable.reviewMessageChannel],
                 reviewMessageTs = row[InstallRequestTable.reviewMessageTs],
                 scopes = scopes,
                 slackResolution = row[InstallRequestTable.slackResolution],
@@ -438,6 +440,7 @@ object InstallRequestRepository {
                             RequestStatus.WITHDRAWN -> RequestDecision.WITHDRAWN
                         }
                     }
+                    it[reviewMessageChannel] = Config.SLACK_CHANNEL_REVIEW
                     it[this.reviewMessageTs] = reviewMessageTs
                     it[this.stateId] = stateId
                     it[createdAt] = now

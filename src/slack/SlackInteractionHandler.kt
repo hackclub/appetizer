@@ -224,7 +224,12 @@ object SlackInteractionHandler {
         )
 
         record.reviewMessageTs?.let { ts ->
-            SlackWorkflowService.postReviewThreadUpdate(ts, userId, "approved the request.")
+            SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
+                ts,
+                userId,
+                "approved the request."
+            )
         }
 
         SlackWorkflowService.sendDecisionDm(
@@ -351,6 +356,7 @@ object SlackInteractionHandler {
 
         record.reviewMessageTs?.let { ts ->
             SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                 ts,
                 userId,
                 "undone the Slack resolution. The previous resolution has been cleared and this request is closed. A new request must be submitted if needed."
@@ -481,7 +487,13 @@ object SlackInteractionHandler {
         )
 
         record.reviewMessageTs?.let { ts ->
-            SlackWorkflowService.postReviewThreadUpdate(ts, userId, "denied the request.", reason)
+            SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
+                ts,
+                userId,
+                "denied the request.",
+                reason
+            )
         }
 
         SlackWorkflowService.sendDecisionDm(
@@ -568,7 +580,13 @@ object SlackInteractionHandler {
         )
 
         record.reviewMessageTs?.let { ts ->
-            SlackWorkflowService.postReviewThreadUpdate(ts, userId, "restricted the application.", reason)
+            SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
+                ts,
+                userId,
+                "restricted the application.",
+                reason
+            )
         }
 
         SlackWorkflowService.sendDecisionDm(
@@ -651,7 +669,12 @@ object SlackInteractionHandler {
         )
 
         record.reviewMessageTs?.let { ts ->
-            SlackWorkflowService.postReviewThreadUpdate(ts, userId, "requested a manual review for this request.")
+            SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
+                ts,
+                userId,
+                "requested a manual review for this request."
+            )
         }
 
         SlackWorkflowService.sendDecisionDm(
@@ -713,7 +736,12 @@ object SlackInteractionHandler {
         )
 
         record.reviewMessageTs?.let { ts ->
-            SlackWorkflowService.postReviewThreadUpdate(ts, userId, "withdrew the installation request.")
+            SlackWorkflowService.postReviewThreadUpdate(
+                record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
+                ts,
+                userId,
+                "withdrew the installation request."
+            )
         }
 
         SlackWorkflowService.sendDecisionDm(

@@ -1,0 +1,1 @@
+ALTER TABLE install_request ADD review_message_channel VARCHAR(20) NULL;

@@ -148,6 +148,7 @@ object AppManager {
 
         request.reviewMessageTs?.let { ts ->
             SlackWorkflowService.postReviewThreadUpdate(
+                request.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                 reviewMessageTs = ts,
                 actorId = null,
                 actionText = "resolved the request ${if (firstListRequestRun) "while the program was offline" else "in the last $interval"}",

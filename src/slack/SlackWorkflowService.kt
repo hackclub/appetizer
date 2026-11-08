@@ -465,7 +465,7 @@ object SlackWorkflowService {
         val reviewTs = record.reviewMessageTs ?: return
         val appUrl = record.appUrl
 
-        SlackManager.updateMessage(Config.SLACK_CHANNEL_REVIEW, reviewTs) {
+        SlackManager.updateMessage(record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW, reviewTs) {
             header {
                 text("App Installation Request", true)
             }
@@ -505,13 +505,14 @@ object SlackWorkflowService {
     }
 
     suspend fun postReviewThreadUpdate(
+        reviewChannelId: String?,
         reviewMessageTs: String,
         actorId: String?,
         actionText: String,
         reason: String? = null,
         actorName: String? = null
     ) {
-        SlackManager.sendMessage(Config.SLACK_CHANNEL_REVIEW, reviewMessageTs) {
+        SlackManager.sendMessage(reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW, reviewMessageTs) {
             richText {
                 richTextSection {
                     if (actorId != null) {
@@ -2299,7 +2300,7 @@ object SlackWorkflowService {
                 if (!req.reviewMessageTs.isNullOrBlank()) {
                     text(" - ")
                     link(
-                        "https://slack.com/archives/${Config.SLACK_CHANNEL_REVIEW}" +
+                        "https://slack.com/archives/${req.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW}" +
                                 "/p${req.reviewMessageTs.replace(".", "")}",
                         "View Thread"
                     )

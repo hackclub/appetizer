@@ -166,6 +166,7 @@ object VerificationManager {
 
                 record.reviewMessageTs?.let { ts ->
                     SlackWorkflowService.postReviewThreadUpdate(
+                        record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                         ts,
                         null,
                         "automatically approved the request after user account verification."
@@ -209,6 +210,7 @@ object VerificationManager {
 
                 record.reviewMessageTs?.let { ts ->
                     SlackWorkflowService.postReviewThreadUpdate(
+                        record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                         ts,
                         null,
                         "moved to manual review after user account verification."
