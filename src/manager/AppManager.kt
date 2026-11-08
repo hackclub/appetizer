@@ -68,7 +68,7 @@ object AppManager {
                         logger.error("Error loading requests from Slack API for workspace $workspace", e)
                     }
                 }
-                logger.info("Found $foundRequests pending requests")
+                //logger.info("Found $foundRequests pending requests")
 
                 checkCurrentPendingRequests(requests)
 
@@ -95,7 +95,7 @@ object AppManager {
         val newRequests = requests.filter { it.id !in pendingRequests }
         val noLongerRequests = pendingRequests.filter { it !in requestIds }
 
-        logger.info("Found ${newRequests.size} new requests and ${noLongerRequests.size} which are no longer pending")
+        logger.info("Found ${newRequests.size} new requests and ${noLongerRequests.size} which are no longer pending (there are currently ${requests.size} pending requests)")
         incomingAppRequests(newRequests)
 
         // the problem is noLongerRequests, all those requests are no longer pending, and that means a third party has approved or rejected the request

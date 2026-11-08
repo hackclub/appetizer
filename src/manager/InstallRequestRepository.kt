@@ -430,6 +430,14 @@ object InstallRequestRepository {
                     it[automaticDecision] = decision.status
                     it[automaticDecisionReason] = decision.reason
                     it[status] = decision.status
+                    if (decision.reason == RequestDecisionReason.SLACK_AUTOMATION) {
+                        it[resolution] = when (decision.status) {
+                            RequestStatus.PENDING_REVIEW -> null
+                            RequestStatus.APPROVED -> RequestDecision.APPROVED
+                            RequestStatus.DENIED -> RequestDecision.DENIED
+                            RequestStatus.WITHDRAWN -> RequestDecision.WITHDRAWN
+                        }
+                    }
                     it[this.reviewMessageTs] = reviewMessageTs
                     it[this.stateId] = stateId
                     it[createdAt] = now
