@@ -334,7 +334,13 @@ object SlackWorkflowService {
                             val hadPreviousFinalResolutions = decisionContext.previousRequests.any { it.status.final }
                             for (scope in request.scopes) {
                                 richTextSection {
-                                    text(scope.name, style = TextStyle(code = true))
+                                    text(
+                                        text = scope.name,
+                                        style = TextStyle(
+                                            code = true,
+                                            bold = decision.relevantRestrictedScopes.contains(scope.name)
+                                        )
+                                    )
                                     text(" - ${scope.tokenType}")
                                     val attributes = mutableListOf<Pair<String, TagColor>>()
 
