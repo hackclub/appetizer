@@ -18,23 +18,25 @@ Start the program. On the first run, it will automatically generate a `config.pr
 
 The configuration file can be specified using the `CONFIG_FILE_PATH` environment variable. If it is not set, `config.properties` in the current working directory is used.
 
-| Config                 | Description                                                                        | Required | Default                                      | Environment Variable   |
-|------------------------|------------------------------------------------------------------------------------|---------:|----------------------------------------------|------------------------|
-| `server.port`          | The port the HTTP server should listen on.                                         |       No | `80`                                         | `SERVER_PORT`          |
-| `server.host`          | The host/interface the server should bind to.                                      |       No | `0.0.0.0`                                    | `SERVER_HOST`          |
-| `postgres.url`         | The R2DBC URL of the PostgreSQL database.                                          |       No | `r2dbc:postgresql://localhost:5432/postgres` | `POSTGRES_URL`         |
-| `postgres.user`        | The username for the PostgreSQL database.                                          |       No | `postgres`                                   | `POSTGRES_USER`        |
-| `postgres.password`    | The password for the PostgreSQL database.                                          |       No | `postgres`                                   | `POSTGRES_PASSWORD`    |
-| `slack.bot.token`      | The Slack bot token.                                                               |  **Yes** | —                                            | `SLACK_BOT_TOKEN`      |
-| `slack.user.token`     | The Slack user token.                                                              |  **Yes** | —                                            | `SLACK_USER_TOKEN`     |
-| `slack.app.token`      | The Slack app token used for Socket Mode.                                          |       No | Empty                                        | `SLACK_APP_TOKEN`      |
-| `signing.secret`       | The Slack Signing Secret to verify requests from slack in HTTP Mode                |       No | Empty                                        | `SIGNING_SECRET`       |
-| `slack.channel.review` | The Slack channel used for reviews.                                                |  **Yes** | —                                            | `SLACK_CHANNEL_REVIEW` |
-| `slack.channel.log`    | The Slack channel used for review logs.                                            |  **Yes** | —                                            | `SLACK_CHANNEL_LOG`    |
-| `socket.mode`          | Whether to use Slack Socket Mode instead of the HTTP API. (**not recommended**)    |       No | `false`                                      | `SOCKET_MODE`          |
-| `admin.users`          | Comma Seperated List of users (starting with U) that can execute the command       |       No | —                                            | `ADMIN_USERS`          |
-| `slack.slash.command`  | Must be the same as the command you registered in Slack/Manifest (starting with /) |       No | `/app-approver`                              | `SLACK_SLASH_COMMAND`  |
-| `allow.approving.own`  | Whether to allow team members to approve there own requests                        |       No | `true`                                       | `ALLOW_APPROVING_OWN`  |
+| Config                 | Description                                                                                      | Required | Default                                      | Environment Variable   |
+|------------------------|--------------------------------------------------------------------------------------------------|---------:|----------------------------------------------|------------------------|
+| `server.port`          | The port the HTTP server should listen on.                                                       |       No | `80`                                         | `SERVER_PORT`          |
+| `server.host`          | The host/interface the server should bind to.                                                    |       No | `0.0.0.0`                                    | `SERVER_HOST`          |
+| `postgres.url`         | The R2DBC URL of the PostgreSQL database.                                                        |       No | `r2dbc:postgresql://localhost:5432/postgres` | `POSTGRES_URL`         |
+| `postgres.user`        | The username for the PostgreSQL database.                                                        |       No | `postgres`                                   | `POSTGRES_USER`        |
+| `postgres.password`    | The password for the PostgreSQL database.                                                        |       No | `postgres`                                   | `POSTGRES_PASSWORD`    |
+| `slack.bot.token`      | The Slack bot token.                                                                             |  **Yes** | —                                            | `SLACK_BOT_TOKEN`      |
+| `slack.user.token`     | The Slack user token.                                                                            |  **Yes** | —                                            | `SLACK_USER_TOKEN`     |
+| `slack.app.token`      | The Slack app token used for Socket Mode.                                                        |       No | Empty                                        | `SLACK_APP_TOKEN`      |
+| `slack.client.token`   | The Slack client token required for command checking.                                            |       No | Empty                                        | `SLACK_CLIENT_TOKEN`   |
+| `slack.session.cookie` | The Slack session cookie starting with `xoxd-` (cookie name `d`), required for command checking. |       No | Empty                                        | `SLACK_SESSION_COOKIE` |
+| `signing.secret`       | The Slack Signing Secret to verify requests from slack in HTTP Mode                              |       No | Empty                                        | `SIGNING_SECRET`       |
+| `slack.channel.review` | The Slack channel used for reviews.                                                              |  **Yes** | —                                            | `SLACK_CHANNEL_REVIEW` |
+| `slack.channel.log`    | The Slack channel used for review logs.                                                          |  **Yes** | —                                            | `SLACK_CHANNEL_LOG`    |
+| `socket.mode`          | Whether to use Slack Socket Mode instead of the HTTP API. (**not recommended**)                  |       No | `false`                                      | `SOCKET_MODE`          |
+| `admin.users`          | Comma Seperated List of users (starting with U) that can execute the command                     |       No | —                                            | `ADMIN_USERS`          |
+| `slack.slash.command`  | Must be the same as the command you registered in Slack/Manifest (starting with /)               |       No | `/app-approver`                              | `SLACK_SLASH_COMMAND`  |
+| `allow.approving.own`  | Whether to allow team members to approve there own requests                                      |       No | `true`                                       | `ALLOW_APPROVING_OWN`  |
 
 > If **any** environment variable is provided, the program will **not** create the `config.properties` file (but it is still **read**).
 
@@ -124,13 +126,14 @@ Team members can review requests (approve, deny, restrict and undo). They are no
 
 ### HTTP API
 
-Slack events are received through the HTTP endpoint:
+Slack payloads are received through the HTTP endpoint:
 
 ```text
 /slack/events
 ```
 
-Set in your Slack app the **Request URL** to `<your-domain>/slack/events`, do the same for Interactions.
+Set in your Slack app the **Request URL** of `events`, `commands` and `interactions` to `<your-domain>/slack/events`,
+all of them need to point to this url, if they dont, parts of the application will not work.
 
 > We do theoretically support Socket Mode, but we do not recommend it, as it was only implemented for development purposes and not tested in production.
 
