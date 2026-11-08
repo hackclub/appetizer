@@ -133,6 +133,7 @@ object App {
                 )
             )
         }
+
         val slackUserToken = async {
             checkToken(
                 Config.SLACK_USER_TOKEN,
@@ -142,6 +143,7 @@ object App {
                 )
             )
         }
+
         val slackAppToken = Config.SLACK_APP_TOKEN.ifBlank { null }?.let {
             async {
                 checkToken(
@@ -152,6 +154,7 @@ object App {
                 )
             }
         }
+
         val slackClientToken = Config.SLACK_CLIENT_TOKEN.ifBlank { null }?.let {
             async {
                 checkToken(
