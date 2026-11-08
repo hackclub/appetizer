@@ -16,6 +16,7 @@ import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import kotlin.system.exitProcess
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 
 // the main class, which is responsibly for starting all other managers
 object App {
@@ -93,6 +94,9 @@ object App {
 
         if (SharedData.validClientTokens) {
             launch {
+                // this is the most CPU intense task on startup, and on startup all things are started
+                // so we delay it
+                delay(30.seconds)
                 AppCommandManager.start()
             }
         }
@@ -109,15 +113,23 @@ object App {
             logger.warn("We are unable to verify requests from Slack, please provide a signing secret")
         }
 
-
-        val server = embeddedServer(
-            factory = Netty,
-            port = Config.PORT,
-            host = Config.HOST,
-            module = Application::rootModule
-        )
-        server.startSuspend(wait = true)
-        logger.info("Server stopped")
+        if (!Config.SOCKET_MODE) {
+            val server = embeddedServer(
+                factory = Netty,
+                port = Config.PORT,
+                host = Config.HOST,
+                module = Application::rootModule
+            )
+            server.startSuspend(wait = true)
+            logger.info("Server stopped")
+        } else {
+            try {
+                awaitCancellation()
+            } catch (e: CancellationException) {
+                logger.info("Stopping...")
+                throw e
+            }
+        }
     }
 
     private suspend fun checkTokens(): Boolean = coroutineScope {
