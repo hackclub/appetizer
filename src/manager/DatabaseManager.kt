@@ -2,17 +2,21 @@ package com.fantamomo.slack.approver.manager
 
 import com.fantamomo.slack.approver.data.Config
 import com.fantamomo.slack.approver.db.*
+import com.fantamomo.slack.approver.utils.invokeSuspendMethode
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.r2dbc.*
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.lang.reflect.InaccessibleObjectException
 import java.net.JarURLConnection
 import java.net.URLDecoder
 import java.util.jar.JarFile
+import kotlin.coroutines.Continuation
 import kotlin.time.Clock
 import kotlin.time.measureTime
 
@@ -143,6 +147,8 @@ object DatabaseManager {
             )
         }
 
+        val softwareMigrationsClass = SoftwareMigrations::class.java
+
         for ((fileName, sql) in migrations.entries.sortedBy { it.key }) {
             logger.info("Applying migration {}", fileName)
 
@@ -152,23 +158,39 @@ object DatabaseManager {
                         exec(sql)
                     }
                 }
+                logger.info("Migration {} applied in {} ms", fileName, duration.inWholeMilliseconds)
+
+                val methodName = fileName.removeSuffix(".sql")
+                try {
+                    val method = softwareMigrationsClass.getDeclaredMethod(methodName, Continuation::class.java)
+                    method.isAccessible = true
+
+                    logger.info("Applying software migration $methodName")
+                    val duration = measureTime {
+                        transaction {
+                            invokeSuspendMethode(
+                                method = method,
+                                receiver = SoftwareMigrations
+                            )
+                        }
+                    }
+                    logger.info("Executed software migration $methodName in $duration")
+                } catch (_: NoSuchMethodException) {
+                } catch (e: InaccessibleObjectException) {
+                    logger.warn("Could not enabled access on the '$methodName' methode")
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("Failed to call software migration called '$methodName' methode", e)
+                    throw e
+                }
                 transaction {
                     MigrationTable.insert {
                         it[migration] = fileName
                         it[appliedAt] = Clock.System.now()
                     }
                 }
-                logger.info(
-                    "Migration {} applied in {} ms",
-                    fileName,
-                    duration.inWholeMilliseconds
-                )
             } catch (e: Exception) {
-                logger.error(
-                    "Failed to apply migration {}",
-                    fileName,
-                    e
-                )
+                logger.error("Failed to apply migration {}", fileName, e)
                 throw e
             }
         }
@@ -186,21 +208,14 @@ object DatabaseManager {
                 try {
                     val stream = classLoader.getResourceAsStream("$MIGRATION_FOLDER_PATH/$file")
                     if (stream == null) {
-                        logger.error(
-                            "Migration {} not found",
-                            file
-                        )
+                        logger.error("Migration {} not found", file)
                         continue
                     }
                     stream.bufferedReader().use {
                         put(file, it.readText())
                     }
                 } catch (e: Exception) {
-                    logger.error(
-                        "Failed to load migration {}",
-                        file,
-                        e
-                    )
+                    logger.error("Failed to load migration {}", file, e)
                 }
             }
         }
@@ -268,14 +283,23 @@ object DatabaseManager {
                 }
 
                 else -> {
-                    logger.warn(
-                        "Unsupported protocol {}",
-                        url.protocol
-                    )
+                    logger.warn("Unsupported protocol {}", url.protocol)
                 }
             }
         }
 
         return result.distinct().sorted()
+    }
+
+    @Suppress("FunctionName", "unused")
+    private object SoftwareMigrations {
+
+        suspend fun V20261108172512__ALTER_TABLE_INSTALL_REQUEST() {
+            InstallRequestTable.update(
+                where = { InstallRequestTable.reviewMessageChannel.isNull() }
+            ) {
+                it[InstallRequestTable.reviewMessageChannel] = Config.SLACK_CHANNEL_REVIEW
+            }
+        }
     }
 }
