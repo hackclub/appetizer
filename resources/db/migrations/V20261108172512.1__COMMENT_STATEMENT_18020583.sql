@@ -1,0 +1,1 @@
+COMMENT ON COLUMN scope_rules.public_description IS 'Optional public description or note';
