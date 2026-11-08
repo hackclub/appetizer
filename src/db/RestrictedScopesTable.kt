@@ -16,5 +16,6 @@ object RestrictedScopesTable : Table("restricted_scopes") {
     val scopeType = enumerationByName<ScopeType>("scope_type", ScopeType.entries.maxOf { it.name.length })
         .comment("The type of scope")
 
-    val review = bool("review").comment("Whether the scope requires review or is directly declined")
+    val review = bool("review")
+        .comment("Whether the scope requires review or is directly declined")
 }
