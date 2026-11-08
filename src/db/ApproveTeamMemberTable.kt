@@ -14,4 +14,6 @@ object ApproveTeamMemberTable : Table("approve_team_member") {
     val deleted = bool("deleted")
         .default(false)
         .comment("Whether the member has been deleted")
+
+    override val primaryKey = PrimaryKey(userId)
 }

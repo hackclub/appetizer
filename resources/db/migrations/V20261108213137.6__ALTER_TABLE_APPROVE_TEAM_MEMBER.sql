@@ -1,0 +1,1 @@
+ALTER TABLE approve_team_member ADD PRIMARY KEY (user_id);
