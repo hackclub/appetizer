@@ -63,6 +63,7 @@ object InstallRequestTable : Table("install_request") {
         RequestDecision.entries.maxOf { it.name.length }
     ).nullable()
 
+    val reviewMessageChannel = varchar("review_message_channel", 20).nullable()
     val reviewMessageTs = varchar("review_message_ts", 30).nullable()
 
     val stateId = varchar("state_id", 20).nullable()

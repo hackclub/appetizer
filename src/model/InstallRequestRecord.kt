@@ -23,6 +23,7 @@ data class InstallRequestRecord(
     val resolvedAt: Instant?,
     val resolutionMessage: String?,
     val resolution: RequestDecision?,
+    val reviewChannelId: String?,
     val reviewMessageTs: String?,
     val scopes: List<ScopeIdentity>,
     val slackResolution: SlackResolution?,
