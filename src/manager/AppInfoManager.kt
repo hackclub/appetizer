@@ -277,12 +277,8 @@ object AppInfoManager {
 
     private fun clearCache() {
         val current = System.currentTimeMillis()
-        for ((id, pair) in cache) {
-            val timestamp = pair.second
-
-            if (current - timestamp > CACHE_EXPIRATION_TIME) {
-                cache.remove(id)
-            }
+        cache.entries.removeIf {
+            current - it.value.second > CACHE_EXPIRATION_TIME
         }
     }
 }
