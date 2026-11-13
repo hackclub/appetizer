@@ -169,3 +169,30 @@ If you are a team member, you can view all pending requests in the App Home and 
 The Bot also DMs the user about the status of their request. And why it was rejected.
 
 There is also a public LOG channel where all requests are logged.
+
+## Why do we need this?
+
+Well so that not everyone can create apps with every scope (some of them can be badly abused)
+
+Want to lean more, here is a [meta thread](https://hackclub.slack.com/archives/C0188CY57PZ/p1790946067527679).
+
+## I want to see this in action!
+
+Yeah sure, you can set it up yourself if you have an enterprise org or a developer sandbox. Or if you are a Hack Clubber and on Slack then [here](https://slack.com/app_redirect?app=A0CD76JJKU6) (only for 13-19y).
+
+Or you could just look at those screenshots:
+
+![review message](./images/review-message.png)  
+The top level message which some basic infos
+
+![direclty declined](./images/directly-declined.png)  
+The message after the top level one to explain more about the request
+
+![App Home Team Screen](images/app-home-team-screen.png)  
+The App Home Team Screen
+
+![My Requests](./images/my-requests.png)  
+All the requests I have done
+
+![Admin Home](./images/admin-home.png)
+The admin home screen, where you can see all team members and all rules for scopes
