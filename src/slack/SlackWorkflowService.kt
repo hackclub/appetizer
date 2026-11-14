@@ -337,7 +337,7 @@ object SlackWorkflowService {
                         style(ListStyle.BULLET)
                         elements {
                             val hadPreviousFinalResolutions = decisionContext.previousRequests.any { it.status.final }
-                            for ((name, _, _, tokenType, isOptional) in request.scopes) {
+                            for ((name, _, _, tokenType, isOptional) in request.scopes.sortedBy { it.name }) {
                                 richTextSection {
                                     text(
                                         text = name,
