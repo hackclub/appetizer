@@ -13,7 +13,9 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.singleOrNull
 import kotlinx.coroutines.flow.toList
@@ -114,7 +116,11 @@ object VerificationManager {
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
-            val appInfo = if (AppInfoManager.canBeUsed()) AppInfoManager.getAppInfo(record.appId) else null
+            val appInfo = if (AppInfoManager.canBeUsed()) runCatching { AppInfoManager.getAppInfo(record.appId) }.onFailure {
+                if (it is kotlinx.coroutines.CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                }
+            }.getOrNull() else null
             val appCommands =
                 if (AppCommandManager.isValid()) AppCommandManager.indexCommands(record.appId) else emptyList()
             val commandsAllReadyInUse =
@@ -277,6 +283,9 @@ object VerificationManager {
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) {
+                currentCoroutineContext().ensureActive()
+            }
             logger.warn("Failed to get verification status for user $userId from database: ${e.message}")
         }
 
@@ -387,6 +396,7 @@ object VerificationManager {
         val body = try {
             SharedData.json.parseToJsonElement(response.bodyAsText()).jsonObject
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) currentCoroutineContext().ensureActive()
             logger.error("Failed to parse alt check response for user $userId: $e")
             return false to ""
         }

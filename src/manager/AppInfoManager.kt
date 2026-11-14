@@ -11,6 +11,8 @@ import io.ktor.http.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
@@ -60,19 +62,23 @@ object AppInfoManager {
 
             coroutineScope {
                 val componentsDeferred = async { marketplaceData(id) }
-                val appProfileDeferred = async { appProfile(id) }
+                val appProfileDeferred = async { runCatching { appProfile(id) }.onFailure {
+                    if (it is kotlinx.coroutines.CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                    }
+                }.getOrNull() }
 
                 val components = runCatching { componentsDeferred.await() }.getOrElse {
-                    logger.error("Failed to get marketplace data for $id", it)
+                    logger.warn("Failed to get marketplace data for $id", it)
                     null
                 }
                 val appProfile = runCatching { appProfileDeferred.await() }.getOrElse {
-                    logger.error("Failed to get app profile for $id", it)
+                    logger.warn("Failed to get app profile for $id", it)
                     null
                 }
 
                 if (components == null && appProfile == null) {
-                    logger.error("Failed to get marketplace data and app profile for $id")
+                    logger.warn("Failed to get marketplace data and app profile for $id")
                     return@coroutineScope null
                 }
 
