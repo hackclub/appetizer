@@ -51,6 +51,10 @@ object InstallRequestTable : Table("install_request") {
     val userVerified = bool("user_verified")
         .comment("At the time when the request was made, if the user was verified")
 
+    val altOwner = varchar("alt_owner", 20)
+        .nullable()
+        .comment("The owner of this alt account")
+
     val slackResolution = enumerationByDynamicName<SlackResolution>("slack_resolution")
         .nullable()
         .comment("What resolution slack came")

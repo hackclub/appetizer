@@ -1,0 +1,1 @@
+ALTER TABLE install_request ADD alt_owner VARCHAR(20) NULL;
