@@ -1336,7 +1336,7 @@ object SlackWorkflowService {
                             } else {
                                 text(req.appName)
                             }
-                            text("(")
+                            text(" (")
                             text(req.appId, style = TextStyle(code = true))
                             text(")\n")
                             text("Status: ", style = TextStyle(bold = true))
