@@ -380,6 +380,7 @@ object InstallRequestRepository {
                 isUserAppCollaborator = row[InstallRequestTable.isUserAppCollaborator],
                 requestedAt = row[InstallRequestTable.requestedAt],
                 userVerified = row[InstallRequestTable.userVerified],
+                altOwner = row[InstallRequestTable.altOwner],
                 automaticDecision = row[InstallRequestTable.automaticDecision],
                 automaticDecisionReason = row[InstallRequestTable.automaticDecisionReason],
                 status = row[InstallRequestTable.status],
@@ -402,6 +403,7 @@ object InstallRequestRepository {
     suspend fun saveRequest(
         request: AppRequested,
         isUserVerified: Boolean,
+        altOwner: String?,
         decision: DecisionResult,
         reviewMessageTs: String? = null,
         stateId: String
@@ -430,6 +432,7 @@ object InstallRequestRepository {
                         ?.lowercase()
                         ?.let { status -> SlackResolution.entries.first { s -> status == s.value } }
                     it[userVerified] = isUserVerified
+                    it[this.altOwner] = altOwner
                     it[automaticDecision] = decision.status
                     it[automaticDecisionReason] = decision.reason
                     it[status] = decision.status

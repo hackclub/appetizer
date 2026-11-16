@@ -16,6 +16,7 @@ data class InstallRequestRecord(
     val isUserAppCollaborator: Boolean,
     val requestedAt: Long,
     val userVerified: Boolean,
+    val altOwner: String?,
     val automaticDecision: RequestStatus,
     val automaticDecisionReason: RequestDecisionReason?,
     val status: RequestStatus,
