@@ -12,7 +12,6 @@ import com.fantamomo.slack.approver.slack.SlackWorkflowService
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.utils.io.*
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -26,6 +25,7 @@ import org.jetbrains.exposed.v1.r2dbc.select
 import org.jetbrains.exposed.v1.r2dbc.upsert
 import org.slf4j.LoggerFactory
 import java.net.ConnectException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
@@ -41,6 +41,8 @@ object VerificationManager {
 
     private const val AUTH_EXTERNAL_CHECK = "https://auth.hackclub.com/api/external/check"
     private const val ALT_CHECK = "http://linkbot.kavyansh.org/check"
+
+    private fun altCheckingEnabled() = "true".equals(SettingsManager["alt_checking_enabled"], ignoreCase = true)
 
     suspend fun start() {
         while (true) {
@@ -112,11 +114,32 @@ object VerificationManager {
                 resolution = record.slackResolution?.value?.let { Resolution(it) },
             )
 
+            val previousAltOwner = record.altOwner
+            val altOwner = getAltOwner(userId)
+
+            val resolutionMessage = when {
+                previousAltOwner == null && altOwner == null -> "Automatically approved after user account verification"
+
+                previousAltOwner == null && altOwner != null ->
+                    "Automatically approved because <@$altOwner> (who is verified) claimed this user as an alt account"
+
+                previousAltOwner != null && altOwner == null ->
+                    "Automatically approved after the user is now verified and als no longer considered an alt account of <@$previousAltOwner>"
+
+                previousAltOwner != altOwner ->
+                    "Automatically approved because the alt account owner changed from <@$previousAltOwner> to <@$altOwner> (who is verified)"
+
+                else ->
+                    "Automatically approved after user account verification"
+            }
+
             val scopeRules = InstallRequestRepository.getScopeRules()
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
-            val appInfo = if (AppInfoManager.canBeUsed()) runCatching { AppInfoManager.getAppInfo(record.appId) }.onFailure {
+            val appInfo = if (AppInfoManager.canBeUsed()) runCatching {
+                AppInfoManager.getAppInfo(record.appId)
+            }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) {
                     currentCoroutineContext().ensureActive()
                 }
@@ -149,7 +172,7 @@ object VerificationManager {
                     newStatus = RequestStatus.APPROVED,
                     resolution = RequestDecision.APPROVED,
                     resolvedBy = "BOT",
-                    resolutionMessage = "Automatically approved after user verification",
+                    resolutionMessage = resolutionMessage,
                     actorType = "BOT",
                     action = "AUTO_APPROVE_VERIFIED",
                     reason = RequestDecisionReason.USER_VERIFIED
@@ -168,7 +191,7 @@ object VerificationManager {
                     resolution = RequestDecision.APPROVED,
                     reason = RequestDecisionReason.USER_VERIFIED,
                     resolvedBy = null,
-                    resolutionMessage = null
+                    resolutionMessage = resolutionMessage
                 )
 
                 record.reviewMessageTs?.let { ts ->
@@ -176,7 +199,7 @@ object VerificationManager {
                         record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                         ts,
                         null,
-                        "automatically approved the request after user account verification."
+                        resolutionMessage
                     )
                 }
 
@@ -189,13 +212,27 @@ object VerificationManager {
                     reason = RequestDecisionReason.USER_VERIFIED,
                 )
 
-                val appText = if (record.appId.startsWith('A')) "<$MARKETPLACE_URL${record.appId}|${record.appName}>" else "`${record.appName}`"
+                val appText = if (record.appId.startsWith('A')) {
+                    "<$MARKETPLACE_URL${record.appId}|${record.appName}>"
+                } else {
+                    "`${record.appName}`"
+                }
 
                 SlackManager.sendTextMessage(
                     Config.SLACK_CHANNEL_LOG,
-                    ":white_check_mark: $appText requested by <@$userId> was automatically approved after account verification."
+                    ":white_check_mark: $appText requested by <@$userId> was automatically approved. $resolutionMessage."
                 )
             } else if (decision.status == RequestStatus.PENDING_REVIEW && record.status != RequestStatus.PENDING_REVIEW) {
+                val statusMessage = when {
+                    previousAltOwner == null && altOwner != null ->
+                        "Moved to manual review because <@$altOwner> claimed this user as an alt account"
+                    previousAltOwner != null && altOwner == null ->
+                        "Moved to manual review because the user is no verified and no longer considered an alt account of <@$previousAltOwner>"
+                    previousAltOwner != altOwner ->
+                        "Moved to manual review because the alt account owner changed from <@$previousAltOwner> to <@$altOwner> (who is verified)"
+                    else -> "Moved to manual review after user account verification"
+                }
+
                 val stateId = InstallRequestRepository.updateStatus(
                     requestId = record.requestId,
                     newStatus = RequestStatus.PENDING_REVIEW,
@@ -203,7 +240,7 @@ object VerificationManager {
                     actorType = "BOT",
                     action = "STATUS_UPDATE_VERIFIED",
                     reason = decision.reason,
-                    message = "Moved to pending review after user verification"
+                    message = statusMessage
                 )
 
                 SlackWorkflowService.updateReviewMessage(
@@ -212,7 +249,7 @@ object VerificationManager {
                     resolution = null,
                     reason = decision.reason,
                     resolvedBy = null,
-                    resolutionMessage = null
+                    resolutionMessage = statusMessage
                 )
 
                 record.reviewMessageTs?.let { ts ->
@@ -220,7 +257,7 @@ object VerificationManager {
                         record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                         ts,
                         null,
-                        "moved to manual review after user account verification."
+                        statusMessage
                     )
                 }
             }
@@ -240,17 +277,44 @@ object VerificationManager {
     }
 
     suspend fun isVerified(userId: String, ignoreCache: Boolean = false): Boolean {
+        return getVerificationInfo(userId, ignoreCache).isVerified
+    }
+
+    suspend fun getAltOwner(userId: String): String? = checkAlt(userId).let { if (it.first) it.second else null }
+
+    suspend fun getVerificationInfo(
+        userId: String,
+        ignoreCache: Boolean = false
+    ): VerificationInfo {
         val cached = cache[userId]
         if (!ignoreCache && cached != null) {
             if (Clock.System.now() < cached.second) {
-                return cached.first.verified
+                return VerificationInfo(
+                    isVerified = cached.first.verified,
+                    altOwner = if (cached.first == VerificationStatus.ALT) getAltOwnerFromDatabase(userId) else null
+                )
             } else {
                 cache.remove(userId)
             }
         }
+
         val status = checkVerificationStatus(userId, ignoreCache = ignoreCache)
         cache[userId] = status to (Clock.System.now() + cacheDuration(status))
-        return status.verified
+
+        return VerificationInfo(
+            isVerified = status.verified,
+            altOwner = if (status == VerificationStatus.ALT) getAltOwnerFromDatabase(userId) else null
+        )
+    }
+
+    private suspend fun getAltOwnerFromDatabase(userId: String): String? {
+        return DatabaseManager.transaction {
+            CachedVerificationStatusTable
+                .select(CachedVerificationStatusTable.mainAccount)
+                .where { CachedVerificationStatusTable.userId eq userId }
+                .singleOrNull()
+                ?.get(CachedVerificationStatusTable.mainAccount)
+        }
     }
 
     private suspend fun checkVerificationStatus(
@@ -376,6 +440,7 @@ object VerificationManager {
     }
 
     private suspend fun checkAlt(userId: String): Pair<Boolean, String> {
+        if (!altCheckingEnabled()) return false to ""
         val response = try {
             SharedData.httpClient.get(ALT_CHECK) {
                 parameter("slack_id", userId)
