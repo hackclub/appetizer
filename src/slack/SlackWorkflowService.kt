@@ -121,6 +121,7 @@ object SlackWorkflowService {
     suspend fun postInitialReviewMessage(
         request: AppRequested,
         isUserVerified: Boolean,
+        altOwner: String?,
         decision: DecisionResult,
         decisionContext: DecisionContext,
         stateId: String
@@ -221,7 +222,14 @@ object SlackWorkflowService {
                         text("User: ", style = TextStyle(bold = true))
                         user(request.user.id)
                         text(" (Verified: ")
-                        tag("$isUserVerified", if (isUserVerified) TagColor.GREEN else TagColor.RED)
+                        val verificationColor = if (isUserVerified) TagColor.GREEN else TagColor.RED
+                        if (altOwner == null) {
+                            tag("$isUserVerified", verificationColor)
+                        } else {
+                            tag("alt account", verificationColor) // isVerified should be green if we get here, but just in case
+                            text(" of ")
+                            user(altOwner)
+                        }
                         text(", Collaborator: ")
                         tag(
                             "${request.isUserAppCollaborator}",

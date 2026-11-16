@@ -241,7 +241,7 @@ object AppManager {
             AppInfoManager.removeFromCache(request.app.id)
         }
 
-        val isVerified = VerificationManager.isVerified(request.user.id)
+        val verificationInfo = VerificationManager.getVerificationInfo(request.user.id)
         val scopeRules = InstallRequestRepository.getScopeRules()
         val isAppRestricted = InstallRequestRepository.isAppRestricted(request.app.id)
         val previousRequests =
@@ -275,7 +275,7 @@ object AppManager {
 
         val decisionContext = DecisionContext(
             request = request,
-            isUserVerified = isVerified,
+            isUserVerified = verificationInfo.isVerified,
             scopeRules = scopeRules,
             isAppRestricted = isAppRestricted,
             previousRequests = previousRequests,
@@ -289,8 +289,8 @@ object AppManager {
         val stateId = randomString(20)
 
         val reviewTs =
-            SlackWorkflowService.postInitialReviewMessage(request, isVerified, decision, decisionContext, stateId)
-        InstallRequestRepository.saveRequest(request, isVerified, decision, reviewTs, stateId)
+            SlackWorkflowService.postInitialReviewMessage(request, verificationInfo.isVerified, verificationInfo.altOwner, decision, decisionContext, stateId)
+        InstallRequestRepository.saveRequest(request, verificationInfo.isVerified, verificationInfo.altOwner, decision, reviewTs, stateId)
 
         if (decision.status == RequestStatus.APPROVED && decision.reason != RequestDecisionReason.SLACK_AUTOMATION) {
             SlackManager.approveApp(request.app.id, request.team?.id, request.enterprise?.id, request.id)
