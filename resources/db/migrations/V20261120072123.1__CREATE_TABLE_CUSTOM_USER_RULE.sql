@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS custom_user_rule (id BIGSERIAL PRIMARY KEY, user_id VARCHAR(20) NOT NULL, pattern VARCHAR(255) DEFAULT '*' NOT NULL, "action" VARCHAR(6) NOT NULL, scope_type VARCHAR(4) DEFAULT 'BOTH' NOT NULL, enabled BOOLEAN DEFAULT TRUE NOT NULL, description VARCHAR(500) NULL, created_by VARCHAR(20) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_by VARCHAR(20) NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);
+CREATE INDEX custom_user_rule_user_id ON custom_user_rule (user_id);
+COMMENT ON COLUMN custom_user_rule.user_id IS 'The Slack user ID of the user the rule applies to';
+COMMENT ON COLUMN custom_user_rule.pattern IS 'The scope pattern (exact, prefix, wildcard, regex, or *)';
+COMMENT ON COLUMN custom_user_rule."action" IS 'Action: ALLOW, REVIEW, or BLOCK';
+COMMENT ON COLUMN custom_user_rule.scope_type IS 'Scope type: BOTH, USER, or BOT';
+COMMENT ON COLUMN custom_user_rule.enabled IS 'Whether the rule is enabled';
+COMMENT ON COLUMN custom_user_rule.description IS 'Optional internal description or note';
+COMMENT ON COLUMN custom_user_rule.created_by IS 'The Slack user ID of the user who created the rule';
+COMMENT ON COLUMN custom_user_rule.created_at IS 'Timestamp of when the rule was created';
+COMMENT ON COLUMN custom_user_rule.updated_by IS 'The Slack user ID of the user who last updated the rule';
+COMMENT ON COLUMN custom_user_rule.updated_at IS 'Timestamp of when the rule was last updated';
+CREATE SEQUENCE IF NOT EXISTS custom_user_rule_id_seq START WITH 1 MINVALUE 1 MAXVALUE 9223372036854775807;
