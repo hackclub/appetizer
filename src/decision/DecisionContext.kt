@@ -7,6 +7,8 @@ data class DecisionContext(
     val request: AppRequested,
     val isUserVerified: Boolean,
     val scopeRules: List<ScopeRule> = emptyList(),
+    // the custom rules of the requesting user, they take precedence over the scope rules
+    val userRules: List<CustomUserRule> = emptyList(),
     val isAppRestricted: Boolean,
     val previousRequests: List<PreviousRequestRecord>,
     val commands: List<SlashCommand>,

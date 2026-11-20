@@ -10,12 +10,15 @@ import com.fantamomo.slack.approver.model.*
 // 3. If the request is for an enterprise-wide installation, the request is denied and requires manual approval.
 // 4. If an identical request (with the same scopes) was previously denied and has not been undone, the request is denied again.
 // 5. If the application requests a command that is already registered by another application, the request is denied.
-// 6. Each requested scope is evaluated against the configured scope rules, taking rule precedence and the user's verification status into account.
+// 6. Each requested scope is evaluated against the custom rules of the requesting user and the configured scope rules.
+//    A matching custom user rule always takes precedence over the scope rules (and the user's verification status).
+//    a) If the request contains at least one scope blocked by a custom user rule, the request is denied.
+//    b) If the request contains at least one scope a custom user rule requires a review for, the request is forwarded for review.
 // 7. If all restricted scopes in the request were previously approved for the user, the request is automatically approved.
 // 8. If the request contains at least one blocked scope, the request is denied.
 // 9. If the request contains at least one scope requiring manual review, the request is forwarded for review.
 // 10. If the user is unverified and requests scopes that are not explicitly allowed for unverified users, the request is denied.
-// 11. Otherwise, the request is automatically approved.
+// 11. Otherwise, the request is automatically approved (if a custom user rule allowed an otherwise not allowed scope, this is the reason).
 object DecisionEngine {
 
     fun evaluate(context: DecisionContext): DecisionResult {
@@ -87,33 +90,76 @@ object DecisionEngine {
             )
         }
 
-        // 6. check all the scopes using rule evaluation
+        // 6. check all the scopes using rule evaluation, the custom rules of the user take precedence over the scope rules
         val blockedScopes = mutableListOf<String>()
         val reviewScopes = mutableListOf<String>()
         val unallowedForUnverifiedScopes = mutableListOf<String>()
+
+        val userBlockedScopes = mutableListOf<String>()
+        val userReviewScopes = mutableListOf<String>()
+        // scopes which would not be allowed by the scope rules, but are allowed by a custom user rule
+        val userAllowedOverriddenScopes = mutableListOf<String>()
+        val appliedUserRules = mutableSetOf<CustomUserRule>()
 
         for ((name, _, _, tokenType1) in context.request.scopes) {
             val scopeName = name.trim()
             val tokenType = tokenType1.trim()
 
-            val matchingRules = context.scopeRules.filter { rule ->
-                rule.matches(scopeName, tokenType, context.isUserVerified)
-            }
+            val globalAction = evaluateScopeRules(context, scopeName, tokenType)
 
-            if (matchingRules.isEmpty()) {
-                if (!context.isUserVerified) {
-                    unallowedForUnverifiedScopes.add(scopeName)
+            val userRule = context.userRules
+                .filter { rule -> rule.matches(context.request.user.id, scopeName, tokenType) }
+                .minWithOrNull(CustomUserRulePrecedenceComparator)
+
+            if (userRule != null) {
+                appliedUserRules += userRule
+                when (userRule.action) {
+                    RuleAction.BLOCK -> userBlockedScopes.add(scopeName)
+                    RuleAction.REVIEW -> userReviewScopes.add(scopeName)
+                    RuleAction.ALLOW -> {
+                        val allowedWithoutUserRule = globalAction == RuleAction.ALLOW ||
+                                (globalAction == null && context.isUserVerified)
+                        if (!allowedWithoutUserRule) userAllowedOverriddenScopes.add(scopeName)
+                    }
                 }
                 continue
             }
 
-            val bestRule = matchingRules.sortedWith(ScopeRulePrecedenceComparator).first()
-
-            when (bestRule.action) {
+            when (globalAction) {
                 RuleAction.BLOCK -> blockedScopes.add(scopeName)
                 RuleAction.REVIEW -> reviewScopes.add(scopeName)
                 RuleAction.ALLOW -> { /* explicitly allowed */ }
+                // no rule matches, so the scope is only allowed for verified users
+                null -> if (!context.isUserVerified) unallowedForUnverifiedScopes.add(scopeName)
             }
+        }
+
+        fun appliedUserRuleIds(action: RuleAction) = appliedUserRules
+            .filter { it.action == action }
+            .map { it.id }
+            .sorted()
+            .joinToString(", ") { "#$it" }
+
+        // 6a. if a custom user rule blocks at least one scope, deny the request
+        if (userBlockedScopes.isNotEmpty()) {
+            return DecisionResult(
+                status = RequestStatus.DENIED,
+                reason = RequestDecisionReason.CUSTOM_USER_RULE,
+                relevantRestrictedScopes = userBlockedScopes.distinct(),
+                requiresManualReview = false,
+                explanation = "The request was denied by a custom rule for this user (${appliedUserRuleIds(RuleAction.BLOCK)})."
+            )
+        }
+
+        // 6b. if a custom user rule requires a review for at least one scope, send to manual review
+        if (userReviewScopes.isNotEmpty()) {
+            return DecisionResult(
+                status = RequestStatus.PENDING_REVIEW,
+                reason = RequestDecisionReason.CUSTOM_USER_RULE,
+                relevantRestrictedScopes = userReviewScopes.distinct(),
+                requiresManualReview = true,
+                explanation = "A custom rule for this user requires a manual review (${appliedUserRuleIds(RuleAction.REVIEW)})."
+            )
         }
 
         val allNonAllowedScopes = (blockedScopes + reviewScopes + unallowedForUnverifiedScopes).distinct()
@@ -177,7 +223,14 @@ object DecisionEngine {
         }
 
         // 11. approve the request
-        return if (context.isUserVerified) {
+        return if (userAllowedOverriddenScopes.isNotEmpty()) {
+            DecisionResult(
+                status = RequestStatus.APPROVED,
+                reason = RequestDecisionReason.CUSTOM_USER_RULE,
+                relevantRestrictedScopes = userAllowedOverriddenScopes.distinct(),
+                explanation = "Request automatically approved because a custom rule for this user allows the otherwise restricted scopes (${appliedUserRuleIds(RuleAction.ALLOW)})."
+            )
+        } else if (context.isUserVerified) {
             DecisionResult(
                 status = RequestStatus.APPROVED,
                 reason = RequestDecisionReason.USER_VERIFIED,
@@ -191,4 +244,11 @@ object DecisionEngine {
             )
         }
     }
+
+    // returns the action of the scope rule with the highest precedence, or null if no scope rule matches
+    private fun evaluateScopeRules(context: DecisionContext, scopeName: String, tokenType: String): RuleAction? =
+        context.scopeRules
+            .filter { rule -> rule.matches(scopeName, tokenType, context.isUserVerified) }
+            .minWithOrNull(ScopeRulePrecedenceComparator)
+            ?.action
 }
