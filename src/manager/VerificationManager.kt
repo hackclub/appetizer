@@ -134,6 +134,7 @@ object VerificationManager {
             }
 
             val scopeRules = InstallRequestRepository.getScopeRules()
+            val userRules = InstallRequestRepository.getCustomUserRules(record.userId)
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
@@ -156,6 +157,7 @@ object VerificationManager {
                     request = dummyRequest,
                     isUserVerified = true,
                     scopeRules = scopeRules,
+                    userRules = userRules,
                     isAppRestricted = isAppRestricted,
                     previousRequests = previousRequests,
                     commandsAllReadyInUse = commandsAllReadyInUse,
