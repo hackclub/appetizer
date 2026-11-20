@@ -1,0 +1,1 @@
+COMMENT ON COLUMN install_request.alt_owner IS 'The owner of this alt account';
