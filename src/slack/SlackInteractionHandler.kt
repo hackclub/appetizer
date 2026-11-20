@@ -119,6 +119,18 @@ object SlackInteractionHandler {
                     updateHome = false
                 )
 
+                "admin_add_user_rule" -> handleAdminAddUserRule(userId, triggerId)
+                "admin_user_rule_menu" -> {
+                    val selected =
+                        action["selected_option"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: continue
+                    val (op, id) = selected.split(":", limit = 2)
+                    when (op) {
+                        "edit" -> handleAdminEditUserRule(userId, id, triggerId)
+                        "toggle" -> handleAdminToggleUserRule(userId, id)
+                        "delete" -> handleAdminDeleteUserRule(userId, id, triggerId)
+                    }
+                }
+
                 "admin_test_scope" -> SlackWorkflowService.openScopeTestModal(userId, triggerId)
                 "admin_test_clear" -> SlackWorkflowService.clearScopeTest(userId)
                 "admin_rule_menu" -> {
@@ -419,6 +431,8 @@ object SlackInteractionHandler {
 
             "modal_scope_rule_submit" -> executeScopeRuleSubmit(userId, view, privateMetadata, triggerId)
             "modal_delete_scope_rule_submit" -> executeDeleteScopeRuleSubmit(userId, privateMetadata, triggerId)
+            "modal_user_rule_submit" -> executeUserRuleSubmit(userId, view, privateMetadata, triggerId)
+            "modal_delete_user_rule_submit" -> executeDeleteUserRuleSubmit(userId, privateMetadata, triggerId)
             "modal_scope_test_submit" -> {
                 val scope = extractInputValue(values, "test_scope_block", "test_scope_input") ?: return
                 val type = extractSelectedOption(values, "test_type_block", "test_type_input") ?: "BOT"
@@ -912,6 +926,153 @@ object SlackInteractionHandler {
         val ruleId = privateMetadata.toLongOrNull() ?: return
         InstallRequestRepository.deleteScopeRule(ruleId)
         logger.info("Deleted scope rule $ruleId by user $userId")
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    private suspend fun handleAdminAddUserRule(userId: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to add user rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val modal = SlackWorkflowService.buildUserRuleModal(
+            title = "Add User Rule",
+            callbackId = "modal_user_rule_submit",
+            rule = null
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private suspend fun handleAdminEditUserRule(userId: String, ruleIdStr: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to edit user rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        val rule = InstallRequestRepository.getCustomUserRule(ruleId) ?: return
+        val modal = SlackWorkflowService.buildUserRuleModal(
+            title = "Edit User Rule",
+            callbackId = "modal_user_rule_submit",
+            rule = rule
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private suspend fun handleAdminToggleUserRule(userId: String, ruleIdStr: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to toggle user rules")
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        InstallRequestRepository.toggleCustomUserRule(ruleId, userId)
+        logger.info("Toggled user rule $ruleId by user $userId")
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    private suspend fun handleAdminDeleteUserRule(userId: String, ruleIdStr: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to delete user rules")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val ruleId = ruleIdStr.toLongOrNull() ?: return
+        val rule = InstallRequestRepository.getCustomUserRule(ruleId) ?: return
+        val modal = SlackWorkflowService.buildAreYouSureModal(
+            title = "Delete User Rule",
+            callbackId = "modal_delete_user_rule_submit",
+            metadata = rule.id.toString(),
+            submitButton = "Delete",
+            cancelButton = "Cancel",
+            message = "Are you sure you want to delete the user rule for <@${rule.userId}> with pattern `${rule.pattern}`? This action cannot be undone."
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private fun extractSelectedUser(values: JsonObject?, blockId: String, actionId: String): String? {
+        val block = values?.get(blockId) as? JsonObject ?: return null
+        val element = block[actionId] as? JsonObject ?: return null
+        return (element["selected_user"] as? JsonPrimitive)?.contentOrNull
+    }
+
+    private suspend fun executeUserRuleSubmit(
+        userId: String,
+        view: JsonObject,
+        privateMetadata: String,
+        triggerId: String?
+    ) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to submit user rules")
+            if (triggerId != null) openUnauthorizedError(triggerId)
+            return
+        }
+
+        val values = view["state"]?.jsonObject?.get("values") as? JsonObject
+        val targetUser = extractSelectedUser(values, "user_block", "user_input")
+        if (targetUser.isNullOrBlank()) {
+            logger.warn("User rule submission missing user")
+            return
+        }
+
+        val pattern = extractInputValue(values, "pattern_block", "pattern_input")?.trim()?.ifBlank { null } ?: "*"
+        // an invalid regex would break the decision engine for this user, so we refuse to store it
+        if (runCatching { ScopeMatcher.fromString(pattern) }.isFailure) {
+            logger.warn("User rule submission by $userId has an invalid pattern: $pattern")
+            return
+        }
+
+        val actionStr = extractSelectedOption(values, "action_block", "action_input")
+        val action = actionStr?.let { runCatching { RuleAction.valueOf(it) }.getOrNull() } ?: RuleAction.REVIEW
+
+        val scopeTypeStr = extractSelectedOption(values, "scope_type_block", "scope_type_input")
+        val scopeType = scopeTypeStr?.let { runCatching { ScopeType.valueOf(it) }.getOrNull() } ?: ScopeType.BOTH
+
+        val description = extractInputValue(values, "description_block", "description_input")?.trim()
+
+        val existingId = privateMetadata.toLongOrNull()
+        if (existingId != null && existingId > 0) {
+            val existing = InstallRequestRepository.getCustomUserRule(existingId)
+            val updated = CustomUserRule(
+                id = existingId,
+                userId = targetUser,
+                pattern = pattern,
+                action = action,
+                scopeType = scopeType,
+                enabled = existing?.enabled ?: true,
+                description = description,
+            )
+            InstallRequestRepository.updateCustomUserRule(updated, userId)
+            logger.info("Updated user rule $existingId for user $targetUser by user $userId")
+        } else {
+            val newRule = CustomUserRule(
+                userId = targetUser,
+                pattern = pattern,
+                action = action,
+                scopeType = scopeType,
+                enabled = true,
+                description = description,
+            )
+            InstallRequestRepository.addCustomUserRule(newRule, userId)
+            logger.info("Created new user rule for user $targetUser with pattern $pattern by user $userId")
+        }
+
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    private suspend fun executeDeleteUserRuleSubmit(
+        userId: String,
+        privateMetadata: String,
+        triggerId: String?
+    ) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to delete user rules")
+            if (triggerId != null) openUnauthorizedError(triggerId)
+            return
+        }
+
+        val ruleId = privateMetadata.toLongOrNull() ?: return
+        InstallRequestRepository.deleteCustomUserRule(ruleId)
+        logger.info("Deleted user rule $ruleId by user $userId")
         SlackWorkflowService.publishAppHome(userId)
     }
 

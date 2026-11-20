@@ -34,6 +34,8 @@ object SlackWorkflowService {
 
     private const val MAX_ADMIN_RULES_SHOWN = 55
 
+    private const val MAX_ADMIN_USER_RULES_SHOWN = 15
+
     private const val MAX_TEST_INACTIVE_SHOWN = 40
 
     private val appHomeCheckCooldown = ConcurrentHashMap<String, Instant>()
@@ -113,6 +115,7 @@ object SlackWorkflowService {
             RequestDecisionReason.COMMAND_ALREADY_IN_USE -> "Command is already in use by another app"
             RequestDecisionReason.SLACK_AUTOMATION -> "The request was resolved by slack automation."
             RequestDecisionReason.THIRD_PARTY -> "The request was resolved by a third party"
+            RequestDecisionReason.CUSTOM_USER_RULE -> "Custom rule for this user"
             null -> "None"
         }
         text(reason)
@@ -583,7 +586,7 @@ object SlackWorkflowService {
             }
 
             RequestStatus.PENDING_REVIEW -> {
-                val scopesInfo = if (relevantScopes.isNotEmpty()) {
+                val scopesInfo = if (relevantScopes.isNotEmpty() && reason != RequestDecisionReason.CUSTOM_USER_RULE) {
                     "\n*Restricted scopes requiring review:* `${relevantScopes.joinToString(", ")}`"
                 } else ""
                 SlackManager.sendDm(userId) {
@@ -846,10 +849,14 @@ object SlackWorkflowService {
             }
 
             RequestStatus.PENDING_REVIEW -> {
-                val scopes = if (decision.relevantRestrictedScopes.isNotEmpty()) {
-                    ": `${decision.relevantRestrictedScopes.joinToString(", ")}`"
-                } else ""
-                ":hourglass_flowing_sand: $user requested $app (submitted for manual review because it requests restricted scopes$scopes)."
+                if (decision.reason == RequestDecisionReason.CUSTOM_USER_RULE) {
+                    ":hourglass_flowing_sand: $user requested $app (submitted for manual review)."
+                } else {
+                    val scopes = if (decision.relevantRestrictedScopes.isNotEmpty()) {
+                        ": `${decision.relevantRestrictedScopes.joinToString(", ")}`"
+                    } else ""
+                    ":hourglass_flowing_sand: $user requested $app (submitted for manual review because it requests restricted scopes$scopes)."
+                }
             }
 
             RequestStatus.DENIED -> {
@@ -1502,6 +1509,10 @@ object SlackWorkflowService {
         val members = InstallRequestRepository.getTeamMembers()
         val rules = InstallRequestRepository.getScopeRules()
         val sortedRules = rules.sortedWith(ScopeRulePrecedenceComparator)
+        val userRules = InstallRequestRepository.getCustomUserRules()
+        val sortedUserRules = userRules.sortedWith(
+            compareBy<CustomUserRule> { it.userId }.then(CustomUserRulePrecedenceComparator)
+        )
         val test = scopeTests[userId]
 
         val enabledCount = rules.count { it.enabled }
@@ -1523,6 +1534,39 @@ object SlackWorkflowService {
                             }
                             user(member)
                         }
+                    }
+                }
+            }
+            divider()
+
+            header {
+                text("User Rules", true)
+            }
+            context {
+                markdownText(
+                    "${userRules.count { it.enabled }} of ${userRules.size} user rules enabled. User rules only apply to " +
+                            "the requests of a specific user and take precedence over the scope rules (and the verification status)."
+                )
+            }
+            actions {
+                button {
+                    text("Add User Rule", true)
+                    actionId("admin_add_user_rule")
+                    value("add")
+                    style("primary")
+                }
+            }
+            if (userRules.isEmpty()) {
+                section {
+                    markdownText("*No user rules configured yet.* Use *Add User Rule* to create the first one.")
+                }
+            } else {
+                for (rule in sortedUserRules.take(MAX_ADMIN_USER_RULES_SHOWN)) {
+                    adminUserRuleEntry(rule)
+                }
+                if (sortedUserRules.size > MAX_ADMIN_USER_RULES_SHOWN) {
+                    context {
+                        markdownText("Showing the first $MAX_ADMIN_USER_RULES_SHOWN of ${sortedUserRules.size} user rules.")
                     }
                 }
             }
@@ -1589,6 +1633,37 @@ object SlackWorkflowService {
             accessory {
                 overflowMenu {
                     actionId("admin_rule_menu")
+                    options {
+                        option {
+                            plainText("Edit", true)
+                            value("edit:${rule.id}")
+                        }
+                        option {
+                            plainText(if (rule.enabled) "Disable" else "Enable", true)
+                            value("toggle:${rule.id}")
+                        }
+                        option {
+                            plainText("Delete", true)
+                            value("delete:${rule.id}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun LayoutBlockDsl.adminUserRuleEntry(rule: CustomUserRule) {
+        val title = "<@${rule.userId}>  ${actionEmoji(rule.action)} *${actionLabel(rule.action)}*  `${rule.pattern}`" +
+                if (rule.enabled) "" else " (_disabled_)"
+        val details = "${typeLabel(rule.scopeType)} $BULLET #${rule.id}" +
+                (rule.updatedBy?.let { " $BULLET last changed by <@$it>" } ?: "")
+        val description = rule.description?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
+
+        section {
+            markdownText("$title\n$details$description")
+            accessory {
+                overflowMenu {
+                    actionId("admin_user_rule_menu")
                     options {
                         option {
                             plainText("Edit", true)
@@ -1775,7 +1850,7 @@ object SlackWorkflowService {
 
         context {
             markdownText(
-                "This test only evaluates scope rules. Restricted apps, org-wide installs, command conflicts " +
+                "This test only evaluates scope rules. User rules, restricted apps, org-wide installs, command conflicts " +
                         "and previously approved or denied requests are checked separately."
             )
         }
@@ -2155,6 +2230,67 @@ object SlackWorkflowService {
                 optional = true
             ),
             contextBlock("If several rules match a scope, the most specific one wins. Use *Test a Scope* on the admin page to check the outcome.")
+        )
+
+        return modalBase(
+            title = title,
+            callbackId = callbackId,
+            metadata = rule?.id?.toString() ?: "",
+            submit = if (rule == null) "Create Rule" else "Save Changes",
+            blocks = blocks
+        )
+    }
+
+    fun buildUserRuleModal(
+        title: String,
+        callbackId: String,
+        rule: CustomUserRule? = null
+    ): JsonObject {
+        val blocks = listOf(
+            inputBlock(
+                blockId = "user_block",
+                label = "User",
+                element = JsonObject().apply {
+                    addProperty("type", "users_select")
+                    addProperty("action_id", "user_input")
+                    add("placeholder", plainText("Select a user"))
+                    if (rule != null) addProperty("initial_user", rule.userId)
+                }
+            ),
+            inputBlock(
+                blockId = "pattern_block",
+                label = "Scope pattern",
+                element = textInputElement(
+                    actionId = "pattern_input",
+                    placeholder = "e.g. *, chat:write, admin:*, /^users:.*/",
+                    initial = rule?.pattern ?: "*"
+                ),
+                hint = "Use * for all scopes, an exact scope name, a * wildcard, or a regular expression wrapped in slashes."
+            ),
+            inputBlock(
+                blockId = "action_block",
+                label = "What should happen?",
+                element = selectElement("action_input", actionOptions, (rule?.action ?: RuleAction.REVIEW).name)
+            ),
+            inputBlock(
+                blockId = "scope_type_block",
+                label = "Scope type",
+                element = selectElement("scope_type_input", scopeTypeOptions, (rule?.scopeType ?: ScopeType.BOTH).name)
+            ),
+            inputBlock(
+                blockId = "description_block",
+                label = "Note (optional)",
+                element = textInputElement(
+                    actionId = "description_input",
+                    placeholder = "e.g. Trusted developer of the platform team",
+                    initial = rule?.description
+                ),
+                optional = true
+            ),
+            contextBlock(
+                "User rules take precedence over the scope rules. If a scope is blocked by a user rule the request is " +
+                        "declined, if it requires a review the request is sent to the approval team."
+            )
         )
 
         return modalBase(
