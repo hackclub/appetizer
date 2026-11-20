@@ -15,5 +15,6 @@ enum class RequestDecisionReason {
     RESOLUTION_UNDONE,
     COMMAND_ALREADY_IN_USE,
     SLACK_AUTOMATION,
-    THIRD_PARTY
+    THIRD_PARTY,
+    CUSTOM_USER_RULE
 }
