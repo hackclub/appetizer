@@ -37,28 +37,9 @@ data class ScopeRule(
 
 object ScopeRulePrecedenceComparator : Comparator<ScopeRule> {
     override fun compare(r1: ScopeRule, r2: ScopeRule): Int {
-        // 1. Matcher priority (1: Direct, 2: Prefix, 3: Wildcard, 4: Regex, 100: All)
-        val m1 = r1.matcher
-        val m2 = r2.matcher
-        if (m1.priority != m2.priority) {
-            return m1.priority.compareTo(m2.priority)
-        }
-
-        // 2. Specificity within the same matcher type
-        if (m1 is ScopeMatcher.PrefixScopeMatcher && m2 is ScopeMatcher.PrefixScopeMatcher) {
-            // Longer prefix is more specific (higher precedence -> smaller index)
-            val prefixComp = m2.prefix.length.compareTo(m1.prefix.length)
-            if (prefixComp != 0) return prefixComp
-        } else if (m1 is ScopeMatcher.WildcardScopeMatcher && m2 is ScopeMatcher.WildcardScopeMatcher) {
-            val nonWildcards1 = r1.pattern.count { it != '*' }
-            val nonWildcards2 = r2.pattern.count { it != '*' }
-            if (nonWildcards1 != nonWildcards2) {
-                return nonWildcards2.compareTo(nonWildcards1)
-            }
-        } else if (m1 is ScopeMatcher.DirectScopeMatcher && m2 is ScopeMatcher.DirectScopeMatcher) {
-            val lenComp = m2.scope.length.compareTo(m1.scope.length)
-            if (lenComp != 0) return lenComp
-        }
+        // 1. + 2. Matcher priority and specificity within the same matcher type
+        val matcherComp = compareMatcherSpecificity(r1.pattern, r1.matcher, r2.pattern, r2.matcher)
+        if (matcherComp != 0) return matcherComp
 
         // 3. User Target Specificity (VERIFIED or UNVERIFIED is more specific than ALL)
         val t1 = if (r1.userTarget == RuleUserTarget.ALL) 2 else 1
@@ -75,21 +56,39 @@ object ScopeRulePrecedenceComparator : Comparator<ScopeRule> {
         }
 
         // 5. Action Tie-Breaker (BLOCK > REVIEW > ALLOW for safety)
-        val a1 = when (r1.action) {
-            RuleAction.BLOCK -> 1
-            RuleAction.REVIEW -> 2
-            RuleAction.ALLOW -> 3
-        }
-        val a2 = when (r2.action) {
-            RuleAction.BLOCK -> 1
-            RuleAction.REVIEW -> 2
-            RuleAction.ALLOW -> 3
-        }
-        if (a1 != a2) {
-            return a1.compareTo(a2)
-        }
+        val actionComp = r1.action.severity.compareTo(r2.action.severity)
+        if (actionComp != 0) return actionComp
 
         // 6. Tie-breaker by ID
         return r1.id.compareTo(r2.id)
     }
 }
+
+// compares two scope matchers, a negative result means the first one is more specific (has higher precedence)
+//  1. Matcher priority (1: Direct, 2: Prefix, 3: Wildcard, 4: Regex, 100: All)
+//  2. Specificity within the same matcher type
+internal fun compareMatcherSpecificity(pattern1: String, m1: ScopeMatcher, pattern2: String, m2: ScopeMatcher): Int {
+    if (m1.priority != m2.priority) {
+        return m1.priority.compareTo(m2.priority)
+    }
+
+    if (m1 is ScopeMatcher.PrefixScopeMatcher && m2 is ScopeMatcher.PrefixScopeMatcher) {
+        // Longer prefix is more specific (higher precedence -> smaller index)
+        return m2.prefix.length.compareTo(m1.prefix.length)
+    } else if (m1 is ScopeMatcher.WildcardScopeMatcher && m2 is ScopeMatcher.WildcardScopeMatcher) {
+        val nonWildcards1 = pattern1.count { it != '*' }
+        val nonWildcards2 = pattern2.count { it != '*' }
+        return nonWildcards2.compareTo(nonWildcards1)
+    } else if (m1 is ScopeMatcher.DirectScopeMatcher && m2 is ScopeMatcher.DirectScopeMatcher) {
+        return m2.scope.length.compareTo(m1.scope.length)
+    }
+    return 0
+}
+
+// the lower the value, the stricter the action (used as tie-breaker, the stricter action wins)
+internal val RuleAction.severity: Int
+    get() = when (this) {
+        RuleAction.BLOCK -> 1
+        RuleAction.REVIEW -> 2
+        RuleAction.ALLOW -> 3
+    }
