@@ -775,6 +775,151 @@ object InstallRequestRepository {
         }
     }
 
+    private fun ResultRow.toCustomUserRule() = CustomUserRule(
+        id = this[CustomUserRuleTable.id],
+        userId = this[CustomUserRuleTable.userId],
+        pattern = this[CustomUserRuleTable.pattern],
+        action = this[CustomUserRuleTable.action],
+        scopeType = this[CustomUserRuleTable.scopeType],
+        enabled = this[CustomUserRuleTable.enabled],
+        description = this[CustomUserRuleTable.description],
+        createdBy = this[CustomUserRuleTable.createdBy],
+        createdAt = this[CustomUserRuleTable.createdAt],
+        updatedBy = this[CustomUserRuleTable.updatedBy],
+        updatedAt = this[CustomUserRuleTable.updatedAt]
+    )
+
+    suspend fun getCustomUserRules(): List<CustomUserRule> {
+        return try {
+            DatabaseManager.transaction {
+                CustomUserRuleTable.selectAll()
+                    .orderBy(CustomUserRuleTable.id to SortOrder.ASC)
+                    .map { it.toCustomUserRule() }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error getting custom user rules", e)
+            throw e
+        }
+    }
+
+    suspend fun getCustomUserRules(userId: String): List<CustomUserRule> {
+        return try {
+            DatabaseManager.transaction {
+                CustomUserRuleTable.selectAll()
+                    .where { CustomUserRuleTable.userId eq userId }
+                    .orderBy(CustomUserRuleTable.id to SortOrder.ASC)
+                    .map { it.toCustomUserRule() }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error getting custom user rules for user $userId", e)
+            throw e
+        }
+    }
+
+    suspend fun getCustomUserRule(id: Long): CustomUserRule? {
+        return try {
+            DatabaseManager.transaction {
+                CustomUserRuleTable.selectAll()
+                    .where { CustomUserRuleTable.id eq id }
+                    .singleOrNull()
+                    ?.toCustomUserRule()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error getting custom user rule $id", e)
+            throw e
+        }
+    }
+
+    suspend fun addCustomUserRule(rule: CustomUserRule, createdBy: String): CustomUserRule {
+        return try {
+            DatabaseManager.transaction {
+                val now = Clock.System.now()
+                val id = CustomUserRuleTable.insert {
+                    it[userId] = rule.userId
+                    it[pattern] = rule.pattern.trim()
+                    it[action] = rule.action
+                    it[scopeType] = rule.scopeType
+                    it[enabled] = rule.enabled
+                    it[description] = rule.description?.trim()
+                    it[CustomUserRuleTable.createdBy] = createdBy
+                    it[createdAt] = now
+                    it[updatedBy] = createdBy
+                    it[updatedAt] = now
+                }[CustomUserRuleTable.id]
+
+                rule.copy(
+                    id = id,
+                    createdBy = createdBy,
+                    createdAt = now,
+                    updatedBy = createdBy,
+                    updatedAt = now
+                )
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error adding custom user rule for user ${rule.userId}", e)
+            throw e
+        }
+    }
+
+    suspend fun updateCustomUserRule(rule: CustomUserRule, updatedBy: String): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                CustomUserRuleTable.update({ CustomUserRuleTable.id eq rule.id }) {
+                    it[userId] = rule.userId
+                    it[pattern] = rule.pattern.trim()
+                    it[action] = rule.action
+                    it[scopeType] = rule.scopeType
+                    it[enabled] = rule.enabled
+                    it[description] = rule.description?.trim()
+                    it[CustomUserRuleTable.updatedBy] = updatedBy
+                    it[updatedAt] = Clock.System.now()
+                } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error updating custom user rule ${rule.id}", e)
+            throw e
+        }
+    }
+
+    suspend fun deleteCustomUserRule(id: Long): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                CustomUserRuleTable.deleteWhere { CustomUserRuleTable.id eq id } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error deleting custom user rule $id", e)
+            throw e
+        }
+    }
+
+    suspend fun toggleCustomUserRule(id: Long, updatedBy: String): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                val current = CustomUserRuleTable.select(CustomUserRuleTable.enabled)
+                    .where { CustomUserRuleTable.id eq id }
+                    .singleOrNull() ?: return@transaction false
+
+                CustomUserRuleTable.update({ CustomUserRuleTable.id eq id }) {
+                    it[enabled] = !current[CustomUserRuleTable.enabled]
+                    it[CustomUserRuleTable.updatedBy] = updatedBy
+                    it[updatedAt] = Clock.System.now()
+                } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error toggling custom user rule $id", e)
+            throw e
+        }
+    }
+
     suspend fun getRestrictedScopes(): List<RestrictedScope> {
         return try {
             getScopeRules().map { RestrictedScope.fromScopeRule(it) }
