@@ -10,6 +10,7 @@ import com.fantamomo.slack.approver.manager.SettingsManager
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
+import com.fantamomo.slack.approver.utils.ExpiringCache
 import com.fantamomo.slack.approver.utils.blockkit.TagColor
 import com.fantamomo.slack.approver.utils.blockkit.TextStyle
 import com.fantamomo.slack.approver.utils.blockkit.addMarkdown
@@ -36,9 +37,12 @@ object SlackWorkflowService {
 
     private const val MAX_ADMIN_USER_RULES_SHOWN = 15
 
+    private const val MAX_ADMIN_PROTECTED_APPS_SHOWN = 8
+
     private const val MAX_TEST_INACTIVE_SHOWN = 40
 
-    private val appHomeCheckCooldown = ConcurrentHashMap<String, Instant>()
+    // only used for a 30-second cooldown, so the entries can expire (before, every user stayed in this map forever)
+    private val appHomeCheckCooldown = ExpiringCache<String, Instant>(maxSize = 5_000, defaultTtl = 30.seconds)
 
     enum class HomeView { TEAM, REQUESTS, ADMIN, INFO }
 
@@ -60,7 +64,7 @@ object SlackWorkflowService {
         RequestStatus.WITHDRAWN -> "outbox_tray"
     }
 
-    private fun statusColor(status: RequestStatus, resolution: RequestDecision?): TagColor {
+    internal fun statusColor(status: RequestStatus, resolution: RequestDecision?): TagColor {
         if (resolution == RequestDecision.UNDONE) return TagColor.PURPLE
         return when (status) {
             RequestStatus.PENDING_REVIEW -> TagColor.YELLOW
@@ -70,7 +74,7 @@ object SlackWorkflowService {
         }
     }
 
-    private fun statusLabel(status: RequestStatus, resolution: RequestDecision?): String {
+    internal fun statusLabel(status: RequestStatus, resolution: RequestDecision?): String {
         if (resolution == RequestDecision.RESTRICTED) return "Restricted"
         if (resolution == RequestDecision.UNDONE) return "Undone"
         return when (status) {
@@ -116,6 +120,7 @@ object SlackWorkflowService {
             RequestDecisionReason.SLACK_AUTOMATION -> "The request was resolved by slack automation."
             RequestDecisionReason.THIRD_PARTY -> "The request was resolved by a third party"
             RequestDecisionReason.CUSTOM_USER_RULE -> "Custom rule for this user"
+            RequestDecisionReason.PROTECTED_APPLICATION -> "Protected application, only admins can approve it"
             null -> "None"
         }
         text(reason)
@@ -586,7 +591,7 @@ object SlackWorkflowService {
             }
 
             RequestStatus.PENDING_REVIEW -> {
-                val scopesInfo = if (relevantScopes.isNotEmpty() && reason != RequestDecisionReason.CUSTOM_USER_RULE) {
+                val scopesInfo = if (relevantScopes.isNotEmpty() && reason != RequestDecisionReason.CUSTOM_USER_RULE && reason != RequestDecisionReason.PROTECTED_APPLICATION) {
                     "\n*Restricted scopes requiring review:* `${relevantScopes.joinToString(", ")}`"
                 } else ""
                 SlackManager.sendDm(userId) {
@@ -849,7 +854,9 @@ object SlackWorkflowService {
             }
 
             RequestStatus.PENDING_REVIEW -> {
-                if (decision.reason == RequestDecisionReason.CUSTOM_USER_RULE) {
+                if (decision.reason == RequestDecisionReason.PROTECTED_APPLICATION) {
+                    ":shield: $user requested $app (submitted for manual review, because the app is protected and only admins can approve it)."
+                } else if (decision.reason == RequestDecisionReason.CUSTOM_USER_RULE) {
                     ":hourglass_flowing_sand: $user requested $app (submitted for manual review)."
                 } else {
                     val scopes = if (decision.relevantRestrictedScopes.isNotEmpty()) {
@@ -958,6 +965,15 @@ object SlackWorkflowService {
                     text(":\n")
                 }
 
+                richTextList {
+                    style(ListStyle.BULLET)
+                    richTextSection {
+                        text("info <app>", style = TextStyle(code = true))
+                        text(": Shows everything about an app (team members can use this too). ")
+                        text("<app>", style = TextStyle(code = true))
+                        text(" can be a bot mention, an app/bot/user/request id, a marketplace link or the app name")
+                    }
+                }
                 richTextList {
                     style(ListStyle.BULLET)
                     richTextSection {
@@ -1183,8 +1199,7 @@ object SlackWorkflowService {
         logger.info("Received app home opened event of $userId")
         val now = Clock.System.now()
         if (!VerificationManager.isVerifiedCached(userId)) {
-            val lastCheck = appHomeCheckCooldown[userId]
-            if (lastCheck == null || (now - lastCheck) >= 30.seconds) {
+            if (appHomeCheckCooldown[userId] == null) {
                 appHomeCheckCooldown[userId] = now
                 val isVerified = VerificationManager.isVerified(userId, ignoreCache = true)
                 if (isVerified) {
@@ -1266,6 +1281,13 @@ object SlackWorkflowService {
                     text(" Welcome, ")
                     user(userId)
                     text(". You can review and manage app installation requests here")
+                }
+            }
+            actions {
+                button {
+                    text("Look up an App", true)
+                    actionId("home_app_lookup")
+                    value("lookup")
                 }
             }
             divider()
@@ -1507,6 +1529,7 @@ object SlackWorkflowService {
 
     private suspend fun publishAdminHome(userId: String, isAdmin: Boolean, isTeam: Boolean) {
         val members = InstallRequestRepository.getTeamMembers()
+        val protectedApps = InstallRequestRepository.getProtectedApps()
         val rules = InstallRequestRepository.getScopeRules()
         val sortedRules = rules.sortedWith(ScopeRulePrecedenceComparator)
         val userRules = InstallRequestRepository.getCustomUserRules()
@@ -1534,6 +1557,39 @@ object SlackWorkflowService {
                             }
                             user(member)
                         }
+                    }
+                }
+            }
+            divider()
+
+            header {
+                text("Protected Apps", true)
+            }
+            context {
+                markdownText(
+                    "Protected apps can not be uninstalled or restricted by anyone, and only admins can approve them. " +
+                            "Use `${Config.SLACK_SLASH_COMMAND} info <app>` to see everything about an app."
+                )
+            }
+            actions {
+                button {
+                    text("Protect an App", true)
+                    actionId("admin_add_protected_app")
+                    value("add")
+                    style("primary")
+                }
+            }
+            if (protectedApps.isEmpty()) {
+                section {
+                    markdownText("_No protected apps._")
+                }
+            } else {
+                for (app in protectedApps.take(MAX_ADMIN_PROTECTED_APPS_SHOWN)) {
+                    protectedAppEntry(app)
+                }
+                if (protectedApps.size > MAX_ADMIN_PROTECTED_APPS_SHOWN) {
+                    context {
+                        markdownText("Showing the first $MAX_ADMIN_PROTECTED_APPS_SHOWN of ${protectedApps.size} protected apps.")
                     }
                 }
             }
@@ -1645,6 +1701,29 @@ object SlackWorkflowService {
                         option {
                             plainText("Delete", true)
                             value("delete:${rule.id}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun LayoutBlockDsl.protectedAppEntry(app: ProtectedApp) {
+        val name = app.appName?.let { "<$MARKETPLACE_URL${app.appId}|$it>" } ?: "<$MARKETPLACE_URL${app.appId}|${app.appId}>"
+        val reason = app.reason?.takeIf { it.isNotBlank() }?.let { "\n_${it.take(150)}_" } ?: ""
+        section {
+            markdownText(":shield: *$name* `${app.appId}`\nprotected by <@${app.protectedBy}> $BULLET ${app.protectedAt.toString().substringBefore('T')}$reason")
+            accessory {
+                overflowMenu {
+                    actionId("admin_protected_app_menu")
+                    options {
+                        option {
+                            plainText("Show info", true)
+                            value("info:${app.appId}")
+                        }
+                        option {
+                            plainText("Remove protection", true)
+                            value("remove:${app.appId}")
                         }
                     }
                 }
@@ -1913,6 +1992,22 @@ object SlackWorkflowService {
         RuleAction.BLOCK -> ":no_entry_sign:"
     }
 
+    private fun actionLabel(action: UserRuleAction): String = when (action) {
+        UserRuleAction.ALLOW -> "Allow"
+        UserRuleAction.SKIP_REVIEW -> "Skip review"
+        UserRuleAction.TREAT_AS_VERIFIED -> "Treat as verified"
+        UserRuleAction.REVIEW -> "Review"
+        UserRuleAction.BLOCK -> "Block"
+    }
+
+    private fun actionEmoji(action: UserRuleAction): String = when (action) {
+        UserRuleAction.ALLOW -> ":white_check_mark:"
+        UserRuleAction.SKIP_REVIEW -> ":fast_forward:"
+        UserRuleAction.TREAT_AS_VERIFIED -> ":ballot_box_with_check:"
+        UserRuleAction.REVIEW -> ":hourglass_flowing_sand:"
+        UserRuleAction.BLOCK -> ":no_entry_sign:"
+    }
+
     private fun targetLabel(target: RuleUserTarget): String = when (target) {
         RuleUserTarget.ALL -> "everyone"
         RuleUserTarget.VERIFIED -> "verified users"
@@ -2166,6 +2261,14 @@ object SlackWorkflowService {
         "Block: decline automatically" to RuleAction.BLOCK.name,
     )
 
+    private val userRuleActionOptions = listOf(
+        "Allow: approve, even blocked scopes" to UserRuleAction.ALLOW.name,
+        "Skip review: approve, but keep blocks" to UserRuleAction.SKIP_REVIEW.name,
+        "Treat as verified: rules still apply" to UserRuleAction.TREAT_AS_VERIFIED.name,
+        "Review: require manual review" to UserRuleAction.REVIEW.name,
+        "Block: decline automatically" to UserRuleAction.BLOCK.name,
+    )
+
     private val targetOptions = listOf(
         "Everyone" to RuleUserTarget.ALL.name,
         "Verified users only" to RuleUserTarget.VERIFIED.name,
@@ -2270,7 +2373,9 @@ object SlackWorkflowService {
             inputBlock(
                 blockId = "action_block",
                 label = "What should happen?",
-                element = selectElement("action_input", actionOptions, (rule?.action ?: RuleAction.REVIEW).name)
+                element = selectElement("action_input", userRuleActionOptions, (rule?.action ?: UserRuleAction.REVIEW).name),
+                hint = "Skip review: no review and no verification needed, but scopes blocked by a scope rule stay blocked. " +
+                        "Treat as verified: the scope rules are evaluated as if the user was verified."
             ),
             inputBlock(
                 blockId = "scope_type_block",
@@ -2289,7 +2394,8 @@ object SlackWorkflowService {
             ),
             contextBlock(
                 "User rules take precedence over the scope rules. If a scope is blocked by a user rule the request is " +
-                        "declined, if it requires a review the request is sent to the approval team."
+                        "declined, if it requires a review the request is sent to the approval team. " +
+                        "*Skip review* lets the user skip the review, but blocked scopes are still declined."
             )
         )
 
@@ -2298,6 +2404,39 @@ object SlackWorkflowService {
             callbackId = callbackId,
             metadata = rule?.id?.toString() ?: "",
             submit = if (rule == null) "Create Rule" else "Save Changes",
+            blocks = blocks
+        )
+    }
+
+    fun buildProtectAppModal(): JsonObject {
+        val blocks = listOf(
+            inputBlock(
+                blockId = "protect_app_block",
+                label = "App",
+                element = textInputElement(
+                    actionId = "protect_app_input",
+                    placeholder = "e.g. A0123456789 or @MyApp",
+                    initial = null
+                ),
+                hint = "An app id, bot mention, bot/user id of the bot, request id, marketplace link or app name."
+            ),
+            inputBlock(
+                blockId = "protect_reason_block",
+                label = "Reason",
+                element = textInputElement(
+                    actionId = "protect_reason_input",
+                    placeholder = "e.g. Required for the security monitoring",
+                    initial = null
+                )
+            ),
+            contextBlock("Protected apps can not be uninstalled or restricted by anyone, and only admins can approve them.")
+        )
+
+        return modalBase(
+            title = "Protect an App",
+            callbackId = "modal_protect_app_submit",
+            metadata = "",
+            submit = "Protect",
             blocks = blocks
         )
     }
