@@ -1,0 +1,2 @@
+ALTER TABLE custom_user_rule ALTER COLUMN "action" TYPE VARCHAR(17);
+COMMENT ON COLUMN custom_user_rule."action" IS 'Action: ALLOW, SKIP_REVIEW, TREAT_AS_VERIFIED, REVIEW, or BLOCK';

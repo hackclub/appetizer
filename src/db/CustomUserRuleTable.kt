@@ -1,7 +1,7 @@
 package com.fantamomo.slack.approver.db
 
-import com.fantamomo.slack.approver.model.RuleAction
 import com.fantamomo.slack.approver.model.ScopeType
+import com.fantamomo.slack.approver.model.UserRuleAction
 import com.fantamomo.slack.approver.utils.enumerationByDynamicName
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.datetime.CurrentTimestamp
@@ -20,8 +20,8 @@ object CustomUserRuleTable : Table("custom_user_rule") {
         .default("*")
         .comment("The scope pattern (exact, prefix, wildcard, regex, or *)")
 
-    val action = enumerationByDynamicName<RuleAction>("action")
-        .comment("Action: ALLOW, REVIEW, or BLOCK")
+    val action = enumerationByDynamicName<UserRuleAction>("action")
+        .comment("Action: ALLOW, SKIP_REVIEW, TREAT_AS_VERIFIED, REVIEW, or BLOCK")
 
     val scopeType = enumerationByDynamicName<ScopeType>("scope_type")
         .default(ScopeType.BOTH)
