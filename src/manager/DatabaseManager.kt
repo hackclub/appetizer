@@ -105,6 +105,7 @@ object DatabaseManager {
                     RestrictedScopesTable,
                     ScopeRulesTable,
                     CustomUserRuleTable,
+                    ProtectedAppTable,
                 )
                 MigrationTable.batchInsert(migrationFiles) {
                     this[MigrationTable.migration] = it
