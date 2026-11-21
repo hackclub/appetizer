@@ -6,6 +6,7 @@ import com.fantamomo.slack.approver.data.SharedData
 import com.fantamomo.slack.approver.model.AppRequested
 import com.fantamomo.slack.approver.slack.SlackInteractionHandler
 import com.fantamomo.slack.approver.slack.SlackWorkflowService
+import com.fantamomo.slack.approver.utils.ExpiringCache
 import com.slack.api.model.block.LayoutBlock
 import com.slack.api.model.kotlin_extension.block.dsl.LayoutBlockDsl
 import com.slack.api.model.kotlin_extension.block.withBlocks
@@ -20,10 +21,8 @@ import org.slf4j.LoggerFactory
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
 import kotlin.contracts.contract
-import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.Instant
 
 // manger for managing slack things
 object SlackManager {
@@ -34,7 +33,11 @@ object SlackManager {
     private const val RECONNECT_DELAY_MS = 3000L
     private const val MAX_RECONNECT_DELAY_MS = 30000L // 30 seconds
 
-    private val cachedDmId: MutableMap<String, Pair<String, Instant>> = mutableMapOf()
+    // slack allows at most 100 blocks in modals and home tabs
+    const val MAX_VIEW_BLOCKS = 100
+
+    // the dm channel ids, the cache is bounded, so it does not grow with every user that ever got a dm
+    private val cachedDmId = ExpiringCache<String, String>(maxSize = 2_000, defaultTtl = 10.minutes)
 
     @Suppress("LEAKED_IN_PLACE_LAMBDA", "WRONG_INVOCATION_KIND") // yeah, scary but completely fine, just look into the withBlocks methode
     @OptIn(ExperimentalContracts::class)
@@ -254,15 +257,7 @@ object SlackManager {
     }
 
     suspend fun openDm(userId: String): String? {
-        val cache = cachedDmId[userId]
-        if (cache != null) {
-            val now = Clock.System.now()
-            if (now <= cache.second) {
-                return cache.first
-            } else {
-                cachedDmId.remove(userId)
-            }
-        }
+        cachedDmId[userId]?.let { return it }
 
         return try {
             val body = com.google.gson.JsonObject().apply {
@@ -287,7 +282,7 @@ object SlackManager {
                     ?.jsonPrimitive
                     ?.contentOrNull
                 if (dmChannelId != null) {
-                    cachedDmId[userId] = dmChannelId to Clock.System.now() + 10.minutes
+                    cachedDmId[userId] = dmChannelId
                 }
                 dmChannelId
             } else {
@@ -323,16 +318,90 @@ object SlackManager {
     suspend fun openView(
         triggerId: String,
         view: com.google.gson.JsonObject
+    ): Boolean = openViewForId(triggerId, view) != null
+
+    // opens a modal and returns its view id (or null if it failed), the id is required to update the view later
+    suspend fun openViewForId(
+        triggerId: String,
+        view: com.google.gson.JsonObject
+    ): String? = callViewsApi("views.open", RateLimits.VIEWS_OPEN, "trigger $triggerId") {
+        addProperty("trigger_id", triggerId)
+        add("view", view)
+    }
+
+    // pushes a modal on top of the currently opened modal (the trigger id must come from an interaction inside a modal)
+    suspend fun pushView(
+        triggerId: String,
+        view: com.google.gson.JsonObject
+    ): String? = callViewsApi("views.push", RateLimits.VIEWS_PUSH, "trigger $triggerId") {
+        addProperty("trigger_id", triggerId)
+        add("view", view)
+    }
+
+    // replaces the content of an already opened modal, this does not need a trigger id
+    // low = true queues the update behind all normal updates (used for unimportant updates like progress)
+    suspend fun updateView(
+        viewId: String,
+        view: com.google.gson.JsonObject,
+        low: Boolean = false
+    ): Boolean = callViewsApi("views.update", RateLimits.VIEWS_UPDATE, "view $viewId", low) {
+        addProperty("view_id", viewId)
+        add("view", view)
+    } != null
+
+    private suspend fun callViewsApi(
+        method: String,
+        rateLimit: com.fantamomo.slack.approver.utils.RateLimitAvoider,
+        target: String,
+        low: Boolean = false,
+        bodyBuilder: com.google.gson.JsonObject.() -> Unit
+    ): String? {
+        return try {
+            val body = com.google.gson.JsonObject().apply(bodyBuilder)
+
+            val response = rateLimit.withLimit(low = low) {
+                SharedData.httpClient.post("$SLACK_API/$method") {
+                    bearerAuth(Config.SLACK_BOT_TOKEN)
+                    contentType(ContentType.Application.Json)
+                    setBody(SharedData.gson.toJson(body))
+                }
+            }
+
+            val text = response.bodyAsText()
+            val json = SharedData.json.parseToJsonElement(text).jsonObject
+
+            if (json["ok"]?.jsonPrimitive?.booleanOrNull != true) {
+                logger.error("Failed to call $method for $target: $text")
+                return null
+            }
+
+            json["view"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull ?: ""
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error("Error calling $method for $target", e)
+            null
+        }
+    }
+
+    // uninstalls an app from the whole organisation (or only from the given workspaces)
+    suspend fun uninstallApp(
+        appId: String,
+        teamIds: List<String> = emptyList(),
     ): Boolean {
         return try {
             val body = com.google.gson.JsonObject().apply {
-                addProperty("trigger_id", triggerId)
-                add("view", view)
+                addProperty("app_id", appId)
+                if (teamIds.isEmpty()) {
+                    addProperty("enterprise_id", SharedData.enterpriseId)
+                } else {
+                    addProperty("team_ids", teamIds.joinToString(","))
+                }
             }
 
-            val response = RateLimits.VIEWS_OPEN.withLimit {
-                SharedData.httpClient.post("$SLACK_API/views.open") {
-                    bearerAuth(Config.SLACK_BOT_TOKEN)
+            val response = RateLimits.ADMIN_APPS_UNINSTALL.withLimit {
+                SharedData.httpClient.post("$SLACK_API/admin.apps.uninstall") {
+                    bearerAuth(Config.SLACK_USER_TOKEN)
                     contentType(ContentType.Application.Json)
                     setBody(SharedData.gson.toJson(body))
                 }
@@ -343,14 +412,14 @@ object SlackManager {
             val ok = json["ok"]?.jsonPrimitive?.booleanOrNull == true
 
             if (!ok) {
-                logger.error("Failed to open view with trigger $triggerId: $text")
+                logger.warn("admin.apps.uninstall failed for app $appId: $text")
             }
 
             ok
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.error("Error opening view with trigger $triggerId", e)
+            logger.warn("Could not uninstall app $appId", e)
             false
         }
     }
@@ -577,7 +646,14 @@ object SlackManager {
         userId: String,
         builder: LayoutBlockDsl.() -> Unit
     ): Boolean {
-        val blocks = withBlocks(builder)
+        var blocks = withBlocks(builder)
+        if (blocks.size > MAX_VIEW_BLOCKS) {
+            // slack rejects the whole view if it has more than 100 blocks, so cut it and tell the user
+            logger.warn("Home view for $userId has ${blocks.size} blocks, only showing the first $MAX_VIEW_BLOCKS")
+            blocks = blocks.take(MAX_VIEW_BLOCKS - 1) + withBlocks {
+                context { markdownText("_Some entries are not shown, because Slack only allows $MAX_VIEW_BLOCKS blocks._") }
+            }
+        }
         val view = com.google.gson.JsonObject().apply {
             addProperty("type", "home")
             add("blocks", SharedData.gson.toJsonTree(blocks))

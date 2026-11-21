@@ -6,6 +6,9 @@ import com.fantamomo.slack.approver.manager.InstallRequestRepository
 import com.fantamomo.slack.approver.manager.SlackManager
 import com.fantamomo.slack.approver.manager.VerificationManager
 import com.fantamomo.slack.approver.model.*
+import com.fantamomo.slack.approver.slack.appinfo.AppInfoHandler
+import com.fantamomo.slack.approver.slack.appinfo.AppInfoViews
+import com.fantamomo.slack.approver.slack.appinfo.AppLookup
 import io.ktor.http.*
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
@@ -52,12 +55,37 @@ object SlackInteractionHandler {
         }
         val userId = jsonObject["user_id"]?.jsonPrimitive?.contentOrNull
             ?: throw IllegalArgumentException("user_id is missing")
+        val text = jsonObject["text"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("text is missing")
+
+        // "info" is the only subcommand team members can use, everything else is for admins only
+        val subcommand = text.trim().substringBefore(' ').lowercase()
+        if (subcommand == "info") {
+            if (!isAdmin(userId) && !InstallRequestRepository.isTeamMemberAuthorized(userId)) {
+                logger.warn("Unauthorized user attempted to use the info command: $userId")
+                openUnauthorizedError(responseUrl)
+                return
+            }
+            val input = text.trim().substringAfter(' ', "").trim()
+            if (input.isEmpty()) {
+                SlackManager.sendEphemeral(responseUrl) {
+                    section { markdownText(":information_source: Usage: `${Config.SLACK_SLASH_COMMAND} info <app>`\n${AppLookup.USAGE}") }
+                }
+                return
+            }
+            val triggerId = jsonObject["trigger_id"]?.jsonPrimitive?.contentOrNull
+            if (triggerId.isNullOrBlank()) {
+                logger.warn("Slash command without trigger_id, can not open the info modal")
+                return
+            }
+            AppInfoHandler.open(userId, triggerId, input)
+            return
+        }
+
         if (userId !in Config.ADMIN_USERS) {
             logger.warn("Unauthorized user attempted to use slash command: $userId")
             openUnauthorizedError(responseUrl)
             return
         }
-        val text = jsonObject["text"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("text is missing")
         if (text.isBlank()) {
             SlackWorkflowService.sendHelpMessage(responseUrl)
             return
@@ -82,6 +110,10 @@ object SlackInteractionHandler {
             val parts = value.split(":")
             val requestId = parts[0]
             val stateId = parts.getOrNull(1)
+
+            if (AppInfoHandler.handleBlockAction(userId, triggerId, actionId, value, json["view"] as? JsonObject)) {
+                continue
+            }
 
             when (actionId) {
                 "review_approve" -> handleReviewApprove(userId, requestId, stateId, triggerId)
@@ -131,6 +163,17 @@ object SlackInteractionHandler {
                     }
                 }
 
+                "admin_add_protected_app" -> handleAdminAddProtectedApp(userId, triggerId)
+                "admin_protected_app_menu" -> {
+                    val selected =
+                        action["selected_option"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: continue
+                    val (op, appId) = selected.split(":", limit = 2)
+                    when (op) {
+                        "info" -> AppInfoHandler.open(userId, triggerId, appId)
+                        "remove" -> handleAdminRemoveProtectedApp(userId, appId, triggerId)
+                    }
+                }
+
                 "admin_test_scope" -> SlackWorkflowService.openScopeTestModal(userId, triggerId)
                 "admin_test_clear" -> SlackWorkflowService.clearScopeTest(userId)
                 "admin_rule_menu" -> {
@@ -173,6 +216,18 @@ object SlackInteractionHandler {
             return
         }
 
+        if (!isAdmin(userId) && InstallRequestRepository.isAppProtected(record.appId)) {
+            logger.warn("User $userId tried to approve the protected app ${record.appId}")
+            SlackManager.openView(
+                triggerId,
+                SlackWorkflowService.buildInfoModal(
+                    "Protected app",
+                    ":shield: *${record.appName}* is a protected app. Only admins can approve it."
+                )
+            )
+            return
+        }
+
         if (record.userId == userId && !fromModal) {
             if (Config.ALLOW_APPROVING_OWN) {
                 val view = SlackWorkflowService.buildAreYouSureModal(
@@ -208,12 +263,18 @@ object SlackInteractionHandler {
             }
         }
 
+        performApprove(userId, record, null)
+    }
+
+    // approves the request (database, slack, review message, dm and log), the caller has to check the permissions
+    internal suspend fun performApprove(userId: String, record: InstallRequestRecord, note: String?) {
+        val requestId = record.requestId
         val stateId = InstallRequestRepository.updateResolution(
             requestId = requestId,
             newStatus = RequestStatus.APPROVED,
             resolution = RequestDecision.APPROVED,
             resolvedBy = userId,
-            resolutionMessage = null,
+            resolutionMessage = note,
             actorType = "ADMIN",
             action = "APPROVE",
             reason = RequestDecisionReason.MANUAL_OVERRIDE
@@ -232,7 +293,7 @@ object SlackInteractionHandler {
             resolution = RequestDecision.APPROVED,
             reason = RequestDecisionReason.MANUAL_OVERRIDE,
             resolvedBy = userId,
-            resolutionMessage = null
+            resolutionMessage = note
         )
 
         record.reviewMessageTs?.let { ts ->
@@ -240,7 +301,8 @@ object SlackInteractionHandler {
                 record.reviewChannelId ?: Config.SLACK_CHANNEL_REVIEW,
                 ts,
                 userId,
-                "approved the request."
+                "approved the request.",
+                note
             )
         }
 
@@ -251,6 +313,7 @@ object SlackInteractionHandler {
             appId = record.appId,
             status = RequestStatus.APPROVED,
             reason = null,
+            customMessage = note,
             resolvedBy = userId
         )
 
@@ -288,6 +351,8 @@ object SlackInteractionHandler {
             openUnauthorizedError(triggerId)
             return
         }
+
+        if (openProtectedRestrictError(requestId, triggerId)) return
 
         val modal = SlackWorkflowService.buildReasonModal(
             "Restrict App",
@@ -433,6 +498,10 @@ object SlackInteractionHandler {
             "modal_delete_scope_rule_submit" -> executeDeleteScopeRuleSubmit(userId, privateMetadata, triggerId)
             "modal_user_rule_submit" -> executeUserRuleSubmit(userId, view, privateMetadata, triggerId)
             "modal_delete_user_rule_submit" -> executeDeleteUserRuleSubmit(userId, privateMetadata, triggerId)
+            AppInfoViews.CALLBACK_LOOKUP -> AppInfoHandler.handleLookupSubmit(userId, triggerId, values)
+            AppInfoViews.CALLBACK_ACTION -> AppInfoHandler.handleActionSubmit(userId, privateMetadata, reason)
+            "modal_protect_app_submit" -> executeProtectAppSubmit(userId, values, triggerId)
+            "modal_unprotect_app_submit" -> executeUnprotectAppSubmit(userId, privateMetadata, triggerId)
             "modal_scope_test_submit" -> {
                 val scope = extractInputValue(values, "test_scope_block", "test_scope_input") ?: return
                 val type = extractSelectedOption(values, "test_type_block", "test_type_input") ?: "BOT"
@@ -559,6 +628,18 @@ object SlackInteractionHandler {
             return
         }
 
+        if (InstallRequestRepository.isAppProtected(record.appId)) {
+            logger.warn("User $userId tried to restrict the protected app ${record.appId}")
+            if (triggerId != null) openProtectedRestrictError(requestId, triggerId)
+            return
+        }
+
+        performRestrict(userId, record, reason)
+    }
+
+    // restricts the app of the request (database, slack, review message, dm and log), the caller has to check the permissions
+    internal suspend fun performRestrict(userId: String, record: InstallRequestRecord, reason: String?) {
+        val requestId = record.requestId
         InstallRequestRepository.restrictApp(
             appId = record.appId,
             appName = record.appName,
@@ -1022,7 +1103,7 @@ object SlackInteractionHandler {
         }
 
         val actionStr = extractSelectedOption(values, "action_block", "action_input")
-        val action = actionStr?.let { runCatching { RuleAction.valueOf(it) }.getOrNull() } ?: RuleAction.REVIEW
+        val action = actionStr?.let { runCatching { UserRuleAction.valueOf(it) }.getOrNull() } ?: UserRuleAction.REVIEW
 
         val scopeTypeStr = extractSelectedOption(values, "scope_type_block", "scope_type_input")
         val scopeType = scopeTypeStr?.let { runCatching { ScopeType.valueOf(it) }.getOrNull() } ?: ScopeType.BOTH
@@ -1073,6 +1154,100 @@ object SlackInteractionHandler {
         val ruleId = privateMetadata.toLongOrNull() ?: return
         InstallRequestRepository.deleteCustomUserRule(ruleId)
         logger.info("Deleted user rule $ruleId by user $userId")
+        SlackWorkflowService.publishAppHome(userId)
+    }
+
+    // opens an error modal and returns true if the app of the request is protected (and can therefore not be restricted)
+    private suspend fun openProtectedRestrictError(requestId: String, triggerId: String): Boolean {
+        val record = InstallRequestRepository.getRequest(requestId) ?: return false
+        if (!InstallRequestRepository.isAppProtected(record.appId)) return false
+        SlackManager.openView(
+            triggerId,
+            SlackWorkflowService.buildInfoModal(
+                "Protected app",
+                ":shield: *${record.appName}* is a protected app. It can not be restricted by anyone."
+            )
+        )
+        return true
+    }
+
+    private suspend fun handleAdminAddProtectedApp(userId: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to protect apps")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        SlackManager.openView(triggerId, SlackWorkflowService.buildProtectAppModal())
+    }
+
+    private suspend fun handleAdminRemoveProtectedApp(userId: String, appId: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to unprotect apps")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val app = InstallRequestRepository.getProtectedApp(appId) ?: return
+        val modal = SlackWorkflowService.buildAreYouSureModal(
+            title = "Remove Protection",
+            callbackId = "modal_unprotect_app_submit",
+            metadata = app.appId,
+            submitButton = "Remove",
+            cancelButton = "Cancel",
+            message = "Remove the protection of *${app.appName ?: app.appId}* (`${app.appId}`)? Team members can then approve and restrict it again."
+        )
+        SlackManager.openView(triggerId, modal)
+    }
+
+    private suspend fun executeProtectAppSubmit(userId: String, values: JsonObject?, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to protect apps")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        val input = extractInputValue(values, "protect_app_block", "protect_app_input")?.trim() ?: return
+        val reason = extractInputValue(values, "protect_reason_block", "protect_reason_input")?.trim()?.ifBlank { null }
+
+        when (val result = AppLookup.resolve(input)) {
+            is AppLookup.Result.NotFound -> {
+                SlackManager.openView(triggerId, SlackWorkflowService.buildInfoModal("App not found", ":mag: ${result.message}"))
+            }
+
+            is AppLookup.Result.Found -> {
+                val appName = InstallRequestRepository.getRequestsForApp(result.appId, limit = 1).firstOrNull()?.appName
+                val added = InstallRequestRepository.protectApp(result.appId, appName, userId, reason)
+                if (added) {
+                    val appText = "<${com.fantamomo.slack.approver.data.Constants.MARKETPLACE_URL}${result.appId}|${appName ?: result.appId}>"
+                    SlackManager.sendTextMessage(
+                        Config.SLACK_CHANNEL_LOG,
+                        ":shield: $appText is now protected by <@$userId>. It can no longer be restricted or uninstalled."
+                    )
+                    if (InstallRequestRepository.isAppRestricted(result.appId)) {
+                        SlackManager.openView(
+                            triggerId,
+                            SlackWorkflowService.buildInfoModal(
+                                "App protected",
+                                ":warning: The app is protected now, but it is still restricted. Approve it to remove the restriction."
+                            )
+                        )
+                    }
+                }
+                SlackWorkflowService.publishAppHome(userId)
+            }
+        }
+    }
+
+    private suspend fun executeUnprotectAppSubmit(userId: String, appId: String, triggerId: String) {
+        if (!isAdmin(userId)) {
+            logger.warn("User $userId is not authorized to unprotect apps")
+            openUnauthorizedError(triggerId)
+            return
+        }
+        if (InstallRequestRepository.unprotectApp(appId)) {
+            SlackManager.sendTextMessage(
+                Config.SLACK_CHANNEL_LOG,
+                ":unlock: The protection of `$appId` was removed by <@$userId>."
+            )
+        }
         SlackWorkflowService.publishAppHome(userId)
     }
 
