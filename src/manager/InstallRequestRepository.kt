@@ -8,6 +8,7 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.singleOrNull
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.toSet
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.r2dbc.*
 import org.slf4j.LoggerFactory
@@ -151,22 +152,12 @@ object InstallRequestRepository {
                 }
 
                 val rows = query.toList()
-                val result = mutableListOf<PreviousRequestRecord>()
+                val allScopes = loadScopes(rows.map { it[InstallRequestTable.requestId] })
+                val result = ArrayList<PreviousRequestRecord>(rows.size)
 
                 for (row in rows) {
                     val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
+                    val scopes = allScopes[reqId].orEmpty()
 
                     result.add(
                         PreviousRequestRecord(
@@ -198,24 +189,7 @@ object InstallRequestRepository {
                     .orderBy(InstallRequestTable.requestedAt, SortOrder.DESC)
                     .limit(limit)
 
-                val rows = query.toList()
-                rows.map { row ->
-                    val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
-
-                    mapRowToRecord(row, scopes)
-                }
+                query.toList().toRecords()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -232,24 +206,7 @@ object InstallRequestRepository {
                     .orderBy(InstallRequestTable.requestedAt, SortOrder.DESC)
                     .limit(limit)
 
-                val rows = query.toList()
-                rows.map { row ->
-                    val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
-
-                    mapRowToRecord(row, scopes)
-                }
+                query.toList().toRecords()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -266,24 +223,7 @@ object InstallRequestRepository {
                     .orderBy(InstallRequestTable.requestedAt, SortOrder.DESC)
                     .limit(limit)
 
-                val rows = query.toList()
-                rows.map { row ->
-                    val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
-
-                    mapRowToRecord(row, scopes)
-                }
+                query.toList().toRecords()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -300,24 +240,7 @@ object InstallRequestRepository {
                     .orderBy(InstallRequestTable.updatedAt, SortOrder.DESC)
                     .limit(limit)
 
-                val rows = query.toList()
-                rows.map { row ->
-                    val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
-
-                    mapRowToRecord(row, scopes)
-                }
+                query.toList().toRecords()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -338,30 +261,37 @@ object InstallRequestRepository {
                                         )
                     }
 
-                val rows = query.toList()
-                rows.map { row ->
-                    val reqId = row[InstallRequestTable.requestId]
-                    val scopes = InstallRequestScopeTable.select(
-                        InstallRequestScopeTable.scope,
-                        InstallRequestScopeTable.tokenType
-                    )
-                        .where { InstallRequestScopeTable.requestId eq reqId }
-                        .map {
-                            ScopeIdentity(
-                                name = it[InstallRequestScopeTable.scope],
-                                tokenType = it[InstallRequestScopeTable.tokenType]
-                            )
-                        }
-                        .toList()
-
-                    mapRowToRecord(row, scopes)
-                }
+                query.toList().toRecords()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             logger.error("Failed to find pending or blocked requests for user $userId", e)
             throw e
         }
+    }
+
+    // loads the scopes of all given requests with ONE query, instead of one query per request
+    private suspend fun loadScopes(requestIds: Collection<String>): Map<String, List<ScopeIdentity>> {
+        if (requestIds.isEmpty()) return emptyMap()
+        val result = HashMap<String, MutableList<ScopeIdentity>>(requestIds.size)
+        InstallRequestScopeTable.select(
+            InstallRequestScopeTable.requestId,
+            InstallRequestScopeTable.scope,
+            InstallRequestScopeTable.tokenType
+        )
+            .where { InstallRequestScopeTable.requestId inList requestIds }
+            .collect {
+                result.getOrPut(it[InstallRequestScopeTable.requestId]) { mutableListOf() } += ScopeIdentity(
+                    name = it[InstallRequestScopeTable.scope],
+                    tokenType = it[InstallRequestScopeTable.tokenType]
+                )
+            }
+        return result
+    }
+
+    private suspend fun List<ResultRow>.toRecords(): List<InstallRequestRecord> {
+        val scopes = loadScopes(map { it[InstallRequestTable.requestId] })
+        return map { row -> mapRowToRecord(row, scopes[row[InstallRequestTable.requestId]].orEmpty()) }
     }
 
     private fun mapRowToRecord(row: ResultRow, scopes: List<ScopeIdentity>): InstallRequestRecord {
@@ -1063,7 +993,7 @@ object InstallRequestRepository {
         }
     }
 
-    suspend fun allPendingRequests(): List<String> {
+    suspend fun allPendingRequests(): Set<String> {
         return try {
             DatabaseManager.transaction {
                 InstallRequestTable.select(InstallRequestTable.requestId)
@@ -1074,11 +1004,184 @@ object InstallRequestRepository {
                         ) and InstallRequestTable.resolution.isNull()
                     }
                     .map { it[InstallRequestTable.requestId] }
-                    .toList()
+                    .toSet()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             logger.error("Error occurred while fetching pending requests", e)
+            throw e
+        }
+    }
+    // ---- app level lookups (used by the app info modal) ----
+
+    // all requests for an app, newest first
+    suspend fun getRequestsForApp(appId: String, limit: Int = 100): List<InstallRequestRecord> {
+        return try {
+            DatabaseManager.transaction {
+                InstallRequestTable.selectAll()
+                    .where { InstallRequestTable.appId eq appId }
+                    .orderBy(InstallRequestTable.requestedAt, SortOrder.DESC)
+                    .limit(limit)
+                    .toList()
+                    .toRecords()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while finding requests of app $appId", e)
+            throw e
+        }
+    }
+
+    suspend fun countRequestsForApp(appId: String): Long {
+        return try {
+            DatabaseManager.transaction {
+                InstallRequestTable.selectAll()
+                    .where { InstallRequestTable.appId eq appId }
+                    .count()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while counting requests of app $appId", e)
+            throw e
+        }
+    }
+
+    suspend fun getAppRestriction(appId: String): AppRestrictionInfo? {
+        return try {
+            DatabaseManager.transaction {
+                AppRestrictionTable.selectAll()
+                    .where { (AppRestrictionTable.appId eq appId) and (AppRestrictionTable.deleted eq false) }
+                    .singleOrNull()
+                    ?.let {
+                        AppRestrictionInfo(
+                            appId = it[AppRestrictionTable.appId],
+                            appName = it[AppRestrictionTable.appName],
+                            restrictedBy = it[AppRestrictionTable.restrictedBy],
+                            restrictedAt = it[AppRestrictionTable.restrictedAt],
+                            reason = it[AppRestrictionTable.reason],
+                        )
+                    }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while loading the restriction of app $appId", e)
+            throw e
+        }
+    }
+
+    // all commands we know of for this app (from the command index, see AppCommandManager)
+    suspend fun getIndexedCommands(appId: String): Map<String, Boolean> {
+        return try {
+            DatabaseManager.transaction {
+                AppCommandsTable.select(AppCommandsTable.command, AppCommandsTable.active)
+                    .where { AppCommandsTable.app eq appId }
+                    .toList()
+                    .associate { it[AppCommandsTable.command] to it[AppCommandsTable.active] }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while loading the commands of app $appId", e)
+            throw e
+        }
+    }
+
+    // finds the app id of an app by (part of) its name, only apps we have seen a request for can be found
+    suspend fun findAppIdsByName(name: String, limit: Int = 5): List<Pair<String, String>> {
+        return try {
+            DatabaseManager.transaction {
+                InstallRequestTable.select(InstallRequestTable.appId, InstallRequestTable.appName)
+                    .where { InstallRequestTable.appName.lowerCase() like "%${escapeLike(name.lowercase())}%" }
+                    .orderBy(InstallRequestTable.requestedAt, SortOrder.DESC)
+                    .limit(50)
+                    .toList()
+                    .map { it[InstallRequestTable.appId] to it[InstallRequestTable.appName] }
+                    .distinctBy { it.first }
+                    .take(limit)
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while searching apps by name", e)
+            throw e
+        }
+    }
+
+    private fun escapeLike(value: String): String =
+        value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    // ---- protected apps ----
+
+    private fun ResultRow.toProtectedApp() = ProtectedApp(
+        appId = this[ProtectedAppTable.appId],
+        appName = this[ProtectedAppTable.appName],
+        protectedBy = this[ProtectedAppTable.protectedBy],
+        protectedAt = this[ProtectedAppTable.protectedAt],
+        reason = this[ProtectedAppTable.reason],
+    )
+
+    suspend fun isAppProtected(appId: String): Boolean = getProtectedApp(appId) != null
+
+    suspend fun getProtectedApp(appId: String): ProtectedApp? {
+        return try {
+            DatabaseManager.transaction {
+                ProtectedAppTable.selectAll()
+                    .where { ProtectedAppTable.appId eq appId }
+                    .singleOrNull()
+                    ?.toProtectedApp()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while checking if app $appId is protected", e)
+            throw e
+        }
+    }
+
+    suspend fun getProtectedApps(): List<ProtectedApp> {
+        return try {
+            DatabaseManager.transaction {
+                ProtectedAppTable.selectAll()
+                    .orderBy(ProtectedAppTable.protectedAt to SortOrder.ASC)
+                    .map { it.toProtectedApp() }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while loading protected apps", e)
+            throw e
+        }
+    }
+
+    // returns false if the app was already protected
+    suspend fun protectApp(appId: String, appName: String?, protectedBy: String, reason: String?): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                val exists = ProtectedAppTable.select(ProtectedAppTable.appId)
+                    .where { ProtectedAppTable.appId eq appId }
+                    .singleOrNull() != null
+                if (exists) return@transaction false
+                ProtectedAppTable.insert {
+                    it[ProtectedAppTable.appId] = appId
+                    it[ProtectedAppTable.appName] = appName?.take(100)
+                    it[ProtectedAppTable.protectedBy] = protectedBy
+                    it[ProtectedAppTable.protectedAt] = Clock.System.now()
+                    it[ProtectedAppTable.reason] = reason?.take(2000)
+                }
+                true
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while protecting app $appId", e)
+            throw e
+        }
+    }
+
+    suspend fun unprotectApp(appId: String): Boolean {
+        return try {
+            DatabaseManager.transaction {
+                ProtectedAppTable.deleteWhere { ProtectedAppTable.appId eq appId } > 0
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            logger.error("Error occurred while unprotecting app $appId", e)
             throw e
         }
     }
