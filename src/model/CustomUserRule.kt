@@ -8,7 +8,7 @@ data class CustomUserRule(
     val id: Long = 0,
     val userId: String,
     val pattern: String = "*",
-    val action: RuleAction,
+    val action: UserRuleAction,
     val scopeType: ScopeType = ScopeType.BOTH,
     val enabled: Boolean = true,
     val description: String? = null,
@@ -46,7 +46,7 @@ object CustomUserRulePrecedenceComparator : Comparator<CustomUserRule> {
             return s1.compareTo(s2)
         }
 
-        // 4. Action Tie-Breaker (BLOCK > REVIEW > ALLOW for safety)
+        // 4. Action Tie-Breaker (BLOCK > REVIEW > TREAT_AS_VERIFIED > SKIP_REVIEW > ALLOW for safety)
         val actionComp = r1.action.severity.compareTo(r2.action.severity)
         if (actionComp != 0) return actionComp
 
