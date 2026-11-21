@@ -10,6 +10,8 @@ data class DecisionContext(
     // the custom rules of the requesting user, they take precedence over the scope rules
     val userRules: List<CustomUserRule> = emptyList(),
     val isAppRestricted: Boolean,
+    // protected apps are never approved automatically, only admins can approve them
+    val isAppProtected: Boolean = false,
     val previousRequests: List<PreviousRequestRecord>,
     val commands: List<SlashCommand>,
     val commandsAllReadyInUse: Map<String, String>,
