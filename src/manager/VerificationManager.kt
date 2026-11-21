@@ -9,6 +9,7 @@ import com.fantamomo.slack.approver.decision.DecisionContext
 import com.fantamomo.slack.approver.decision.DecisionEngine
 import com.fantamomo.slack.approver.model.*
 import com.fantamomo.slack.approver.slack.SlackWorkflowService
+import com.fantamomo.slack.approver.utils.ExpiringCache
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -31,13 +32,13 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.Instant
 
 // manager to cache and store verifications status
 object VerificationManager {
     private val logger = LoggerFactory.getLogger(VerificationManager::class.java)
 
-    private val cache: MutableMap<String, Pair<VerificationStatus, Instant>> = mutableMapOf()
+    // bounded, so not every user who ever opened the app home stays in memory (the database is the real cache)
+    private val cache = ExpiringCache<String, VerificationStatus>(maxSize = 5_000, defaultTtl = 10.minutes)
 
     private const val AUTH_EXTERNAL_CHECK = "https://auth.hackclub.com/api/external/check"
     private const val ALT_CHECK = "http://linkbot.kavyansh.org/check"
@@ -136,6 +137,7 @@ object VerificationManager {
             val scopeRules = InstallRequestRepository.getScopeRules()
             val userRules = InstallRequestRepository.getCustomUserRules(record.userId)
             val isAppRestricted = InstallRequestRepository.isAppRestricted(record.appId)
+            val isAppProtected = InstallRequestRepository.isAppProtected(record.appId)
             val previousRequests =
                 InstallRequestRepository.findPreviousRequests(record.appId, record.userId, record.requestId)
             val appInfo = if (AppInfoManager.canBeUsed()) runCatching {
@@ -159,6 +161,7 @@ object VerificationManager {
                     scopeRules = scopeRules,
                     userRules = userRules,
                     isAppRestricted = isAppRestricted,
+                    isAppProtected = isAppProtected,
                     previousRequests = previousRequests,
                     commandsAllReadyInUse = commandsAllReadyInUse,
                     commands = appCommands,
@@ -267,15 +270,7 @@ object VerificationManager {
     }
 
     fun isVerifiedCached(userId: String): Boolean {
-        val cached = cache[userId]
-        if (cached != null) {
-            if (Clock.System.now() < cached.second) {
-                return cached.first.verified
-            } else {
-                cache.remove(userId)
-            }
-        }
-        return false
+        return cache[userId]?.verified == true
     }
 
     suspend fun isVerified(userId: String, ignoreCache: Boolean = false): Boolean {
@@ -288,20 +283,16 @@ object VerificationManager {
         userId: String,
         ignoreCache: Boolean = false
     ): VerificationInfo {
-        val cached = cache[userId]
-        if (!ignoreCache && cached != null) {
-            if (Clock.System.now() < cached.second) {
-                return VerificationInfo(
-                    isVerified = cached.first.verified,
-                    altOwner = if (cached.first == VerificationStatus.ALT) getAltOwnerFromDatabase(userId) else null
-                )
-            } else {
-                cache.remove(userId)
-            }
+        val cached = if (ignoreCache) null else cache[userId]
+        if (cached != null) {
+            return VerificationInfo(
+                isVerified = cached.verified,
+                altOwner = if (cached == VerificationStatus.ALT) getAltOwnerFromDatabase(userId) else null
+            )
         }
 
         val status = checkVerificationStatus(userId, ignoreCache = ignoreCache)
-        cache[userId] = status to (Clock.System.now() + cacheDuration(status))
+        cache.put(userId, status, cacheDuration(status))
 
         return VerificationInfo(
             isVerified = status.verified,
