@@ -79,17 +79,47 @@ class RateLimitAvoider(
 
         wakeUp.trySend(Unit)
 
-        request.permit.await()
+        try {
+            request.permit.await()
+        } catch (e: CancellationException) {
+            // the caller was cancelled while waiting. If the request is still queued, just remove it.
+            // If the permit was already granted, we have to release it, otherwise requestRunning would stay true
+            // forever and every following request of this limiter would wait forever.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    val wasQueued = if (low) lowQueue.remove(request) else normalQueue.remove(request)
+                    if (!wasQueued && request.permit.isCompleted) {
+                        requestRunning = false
+                    }
+                }
+                wakeUp.trySend(Unit)
+            }
+            throw e
+        }
 
         return try {
             block()
         } finally {
-            mutex.withLock {
-                requestRunning = false
+            // NonCancellable: the release must also happen if the block was cancelled
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    requestRunning = false
+                }
             }
 
             wakeUp.trySend(Unit)
         }
+    }
+
+    /**
+     * Returns true if a request would be started immediately and at least [reserve] requests of the
+     * current window would still be left afterward. Used for unimportant requests (e.g. progress updates),
+     * which should rather be skipped than delay other requests.
+     */
+    suspend fun hasSpareCapacity(reserve: Int): Boolean = mutex.withLock {
+        removeExpiredRequestTimes()
+        !requestRunning && normalQueue.isEmpty() && lowQueue.isEmpty() &&
+                requestTimes.size + 1 + reserve <= maxRequestsPerMinute
     }
 
     private suspend fun schedulerLoop() {
