@@ -3,8 +3,8 @@ package com.fantamomo.slack.approver.manager
 import com.fantamomo.slack.approver.data.Config
 import com.fantamomo.slack.approver.data.Constants
 import com.fantamomo.slack.approver.data.SharedData
-import com.fantamomo.slack.approver.model.AppInfo
-import com.fantamomo.slack.approver.model.SlashCommand
+import com.fantamomo.slack.approver.model.*
+import com.fantamomo.slack.approver.utils.ExpiringCache
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import java.io.EOFException
+import kotlin.time.Duration.Companion.minutes
 
 // we the following apis to gather as much information as possible
 // 1. https://slack.com/api/apps.profile.get
@@ -25,11 +26,22 @@ import java.io.EOFException
 // I tried some more, but those two give all required infos
 object AppInfoManager {
     private val logger = LoggerFactory.getLogger(AppInfoManager::class.java)
-    private const val CACHE_EXPIRATION_TIME = 1000L * 60L * 5L // 5 minutes
 
-    private val cache = mutableMapOf<String, Pair<AppInfo, Long>>()
-    private val cacheMutex = Mutex()
+    // only the small AppInfo is cached, the cache is bounded so it can not grow forever
+    private val cache = ExpiringCache<String, AppInfo>(maxSize = 200, defaultTtl = 5.minutes)
     private val requestMutex = Mutex()
+
+    // the marketplace page has a lot of automount components, but we only need those,
+    // all other components are skipped while streaming the page instead of being parsed (saves a lot of memory)
+    private val NEEDED_COMPONENTS = setOf(
+        "AppDirectoryAdditionalInfo",
+        "AppDirectoryFeatures",
+        "AppDirectoryAuthorizations",
+        "AppDirectoryBotUser",
+    )
+
+    // props of a single component larger than this are ignored, so a broken page can not exhaust the memory
+    private const val MAX_PROPS_LENGTH = 2 * 1024 * 1024
 
     fun canBeUsed() = SharedData.validClientTokens
 
@@ -41,102 +53,190 @@ object AppInfoManager {
         require(id.startsWith("A")) { "id must start with A" }
         require(canBeUsed()) { "Client tokens are not valid" }
 
-        suspend fun getCache(): AppInfo? {
-            if (cache.containsKey(id)) {
-                cacheMutex.withLock {
-                    if (cache.containsKey(id)) {
-                        val info = cache[id]!!.first
-                        cache[id] = info to System.currentTimeMillis()
-                        clearCache()
-                        return info
-                    }
-                }
-            }
-            return null
-        }
-
-        getCache()?.let { return it }
+        cache[id]?.let { return it }
 
         return requestMutex.withLock {
-            getCache()?.let { return it }
-
-            coroutineScope {
-                val componentsDeferred = async { marketplaceData(id) }
-                val appProfileDeferred = async { runCatching { appProfile(id) }.onFailure {
-                    if (it is kotlinx.coroutines.CancellationException) {
-                        currentCoroutineContext().ensureActive()
-                    }
-                }.getOrNull() }
-
-                val components = runCatching { componentsDeferred.await() }.getOrElse {
-                    logger.warn("Failed to get marketplace data for $id", it)
-                    null
-                }
-                val appProfile = runCatching { appProfileDeferred.await() }.getOrElse {
-                    logger.warn("Failed to get app profile for $id", it)
-                    null
-                }
-
-                if (components == null && appProfile == null) {
-                    logger.warn("Failed to get marketplace data and app profile for $id")
-                    return@coroutineScope null
-                }
-
-                val appDirectoryAdditionalInfo = components?.get("AppDirectoryAdditionalInfo")
-                val appDirectoryFeatures = components?.get("AppDirectoryFeatures")
-                val appDirectoryAuthorizations = components?.get("AppDirectoryAuthorizations")
-                val appDirectoryBotUser = components?.get("AppDirectoryBotUser")
-
-                val botUser = appProfile?.get("bot_user")?.jsonObjectOrNull
-
-                val botUserId = botUser?.get("id")?.jsonPrimitiveOrNull?.contentOrNull
-                    ?.takeIf { it.isNotBlank() && (it[0] == 'U' || it[0] == 'W') }
-
-                val appInfo = AppInfo(
-                    id = id,
-                    publicChannelCount = appDirectoryBotUser?.get("memberships")?.jsonArrayOrNull?.size,
-                    otherChannelCount = appDirectoryBotUser?.get("otherGroups")?.jsonPrimitiveOrNull?.intOrNull,
-                    allChannelCount = botUser?.get("memberships_count")?.jsonPrimitiveOrNull?.intOrNull,
-                    botUserId = botUserId,
-                    isExternal = appDirectoryAdditionalInfo?.get("is_external")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isInstalled = appProfile?.get("is_installed")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isCertified = appDirectoryAdditionalInfo?.get("is_certified")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isAiApp = appDirectoryFeatures?.get("is_ai_app")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isAgentApp = appDirectoryFeatures?.get("is_agent_app")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isSearchApp = appDirectoryFeatures?.get("is_search_app")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    isAgentResponseModeEnabled = appDirectoryAuthorizations?.get("is_agent_response_mode_enabled")?.jsonPrimitiveOrNull?.booleanOrNull == true,
-                    dateInstalled = appProfile?.get("date_installed")?.jsonPrimitiveOrNull?.longOrNull,
-                    authorizationsCount = appDirectoryAuthorizations?.get("authorizations")?.jsonArrayOrNull
-                        ?.count { auth -> auth.jsonObjectOrNull?.get("encodedUserLink")?.jsonPrimitiveOrNull?.contentOrNull.let { it != null && it != botUserId } },
-                    commands = mutableSetOf<SlashCommand>()
-                        .apply {
-                            addAll(
-                                appProfile?.get("commands")
-                                    ?.jsonObjectOrNull?.values
-                                    ?.mapNotNull { it.jsonObjectOrNull?.asSlashCommand() }
-                                    ?: emptyList()
-                            )
-                            addAll(
-                                appDirectoryFeatures?.get("slashCommands")?.jsonArrayOrNull
-                                    ?.mapNotNull { it.jsonObjectOrNull?.asSlashCommand() }
-                                    ?: emptyList()
-                            )
-                        }
-                        .toList()
-                )
-                cacheMutex.withLock {
-                    cache[id] = appInfo to System.currentTimeMillis()
-                }
-                return@coroutineScope appInfo
-            }
+            cache[id]?.let { return it }
+            fetchDetails(id)?.info
         }
     }
 
-    private fun JsonObject.asSlashCommand(): SlashCommand? {
-        val name = this["name"]?.jsonPrimitiveOrNull?.contentOrNull ?: return null
-        val description = this["desc"]?.jsonPrimitiveOrNull?.contentOrNull
-        val usageDescription = this["usage"]?.jsonPrimitiveOrNull?.contentOrNull
-        return SlashCommand(name, description ?: "", usageDescription ?: "")
+    // the two parts which are loaded from slack, used to report the progress
+    enum class Part { PROFILE, MARKETPLACE }
+
+    // fetches everything we know about the app, this is never cached here (but the slim AppInfo is updated in the cache)
+    // onPartDone is called when a part is loaded (success = false if it failed)
+    suspend fun getAppDetails(
+        id: String,
+        onPartDone: ((part: Part, success: Boolean) -> Unit)? = null
+    ): AppMarketplaceDetails? {
+        require(id.isNotBlank()) { "id cannot be blank" }
+        require(id.startsWith("A")) { "id must start with A" }
+        require(canBeUsed()) { "Client tokens are not valid" }
+
+        return fetchDetails(id, onPartDone)
+    }
+
+    private suspend fun fetchDetails(
+        id: String,
+        onPartDone: ((part: Part, success: Boolean) -> Unit)? = null
+    ): AppMarketplaceDetails? = coroutineScope {
+        val componentsDeferred = async {
+            try {
+                marketplaceData(id).also { onPartDone?.invoke(Part.MARKETPLACE, true) }
+            } catch (e: Exception) {
+                onPartDone?.invoke(Part.MARKETPLACE, false)
+                throw e
+            }
+        }
+        val appProfileDeferred = async {
+            runCatching { appProfile(id) }.onFailure {
+                if (it is kotlinx.coroutines.CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                }
+            }.getOrNull().also { onPartDone?.invoke(Part.PROFILE, it != null) }
+        }
+
+        val components = runCatching { componentsDeferred.await() }.getOrElse {
+            logger.warn("Failed to get marketplace data for $id", it)
+            null
+        }
+        val appProfile = runCatching { appProfileDeferred.await() }.getOrElse {
+            logger.warn("Failed to get app profile for $id", it)
+            null
+        }
+
+        if (components == null && appProfile == null) {
+            logger.warn("Failed to get marketplace data and app profile for $id")
+            return@coroutineScope null
+        }
+
+        val details = parseDetails(id, components.orEmpty(), appProfile)
+        cache[id] = details.info
+        details
+    }
+
+    private fun parseDetails(id: String, components: Map<String, JsonObject>, appProfile: JsonObject?): AppMarketplaceDetails {
+        val additionalInfo = components["AppDirectoryAdditionalInfo"]
+        val features = components["AppDirectoryFeatures"]
+        val authorizations = components["AppDirectoryAuthorizations"]
+        val botUserComponent = components["AppDirectoryBotUser"]
+
+        val botUser = appProfile?.get("bot_user")?.jsonObjectOrNull
+
+        val botUserId = botUser?.get("id")?.jsonPrimitiveOrNull?.contentOrNull
+            ?.takeIf { it.isNotBlank() && (it[0] == 'U' || it[0] == 'W') }
+
+        val authorizationList = authorizations?.get("authorizations")?.jsonArrayOrNull
+            ?.mapNotNull { it.jsonObjectOrNull }
+            ?.map { auth ->
+                AppAuthorization(
+                    userId = auth.string("encodedUserLink")?.takeIf { it.isNotBlank() },
+                    userDisplayName = auth.string("userDisplayName")?.takeIf { it.isNotBlank() },
+                    date = auth["date"]?.jsonPrimitiveOrNull?.longOrNull,
+                    description = auth.string("fullDescription")?.trim()?.takeIf { it.isNotBlank() },
+                )
+            }
+            ?.filter { it.userId != botUserId }
+            .orEmpty()
+
+        val commandDetails = buildList {
+            appProfile?.get("commands")?.jsonObjectOrNull?.values
+                ?.mapNotNull { it.jsonObjectOrNull?.asCommandDetail() }
+                ?.let { addAll(it) }
+            features?.get("slashCommands")?.jsonArrayOrNull
+                ?.mapNotNull { it.jsonObjectOrNull?.asCommandDetail() }
+                ?.let { addAll(it) }
+        }
+            .groupBy { it.name }
+            .map { (name, duplicates) ->
+                AppCommandDetail(
+                    name = name,
+                    description = duplicates.firstNotNullOfOrNull { it.description.ifBlank { null } } ?: "",
+                    usageHint = duplicates.firstNotNullOfOrNull { it.usageHint.ifBlank { null } } ?: "",
+                    url = duplicates.firstNotNullOfOrNull { it.url?.ifBlank { null } },
+                )
+            }
+
+        val channelIds = botUserComponent?.get("memberships")?.jsonArrayOrNull
+            ?.mapNotNull { it.jsonPrimitiveOrNull?.contentOrNull ?: it.jsonObjectOrNull?.string("id") }
+            .orEmpty()
+
+        val info = AppInfo(
+            id = id,
+            publicChannelCount = botUserComponent?.get("memberships")?.jsonArrayOrNull?.size,
+            otherChannelCount = botUserComponent?.get("otherGroups")?.jsonPrimitiveOrNull?.intOrNull,
+            allChannelCount = botUser?.get("memberships_count")?.jsonPrimitiveOrNull?.intOrNull,
+            botUserId = botUserId,
+            isExternal = additionalInfo.flag("is_external"),
+            isInstalled = appProfile.flag("is_installed"),
+            isCertified = additionalInfo.flag("is_certified"),
+            isAiApp = features.flag("is_ai_app") || features.flag("isAiApp"),
+            isAgentApp = features.flag("is_agent_app") || features.flag("isAgentApp"),
+            isSearchApp = features.flag("is_search_app") || features.flag("isSearchApp"),
+            isAgentResponseModeEnabled = authorizations.flag("is_agent_response_mode_enabled"),
+            dateInstalled = appProfile?.get("date_installed")?.jsonPrimitiveOrNull?.longOrNull,
+            authorizationsCount = authorizationList.count { it.userId != null },
+            commands = commandDetails.map { SlashCommand(it.name, it.description, it.usageHint) }
+        )
+
+        return AppMarketplaceDetails(
+            info = info,
+            name = features?.string("appName") ?: authorizations?.string("appName") ?: appProfile?.string("name"),
+            botUsername = botUserComponent?.string("botUsername")?.takeIf { it.isNotBlank() },
+            channelIds = channelIds,
+            authorizations = authorizationList,
+            globalShortcuts = features?.get("globalShortcuts").asShortcuts(),
+            messageShortcuts = features?.get("messageShortcuts").asShortcuts(),
+            commands = commandDetails,
+            mcpServers = features?.get("mcpServers")?.jsonArrayOrNull
+                ?.mapNotNull { it.jsonObjectOrNull }
+                ?.map {
+                    AppMcpServer(
+                        name = it.string("name") ?: "Unnamed",
+                        url = it.string("url"),
+                        toolCount = it["tools"]?.jsonArrayOrNull?.size ?: 0
+                    )
+                }
+                .orEmpty(),
+            permissions = extractListItems(authorizations?.string("authSummary")),
+            isCallsApp = features.flag("isCallsApp"),
+            isOrgReadyApp = features.flag("isOrgReadyApp"),
+            supportsEnterpriseManagedAuthorization = features.flag("appSupportsEnterpriseManagedAuthorization"),
+        )
+    }
+
+    private fun JsonElement?.asShortcuts(): List<AppShortcut> = this?.jsonArrayOrNull
+        ?.mapNotNull { it.jsonObjectOrNull }
+        ?.map {
+            AppShortcut(
+                name = it.string("name") ?: "Unnamed",
+                description = it.string("desc") ?: "",
+                callbackId = it.string("callback_id")?.takeIf { id -> id.isNotBlank() }
+            )
+        }
+        .orEmpty()
+
+    private fun JsonObject.asCommandDetail(): AppCommandDetail? {
+        val name = string("name") ?: return null
+        return AppCommandDetail(
+            name = name,
+            description = string("desc") ?: string("description") ?: "",
+            usageHint = string("usage") ?: string("usage_hint") ?: "",
+            url = string("url")?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    private val listItemRegex = Regex("<li[^>]*>(.*?)</li>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    private val tagRegex = Regex("<[^>]+>")
+    private val whitespaceRegex = Regex("\\s+")
+
+    private fun extractListItems(html: String?): List<String> {
+        if (html.isNullOrBlank()) return emptyList()
+        return listItemRegex.findAll(html)
+            .map { decodeHtmlEntities(tagRegex.replace(it.groupValues[1], "")).replace(whitespaceRegex, " ").trim() }
+            .filter { it.isNotBlank() }
+            .toList()
     }
 
     private suspend fun appProfile(id: String): JsonObject {
@@ -193,11 +293,11 @@ object AppInfoManager {
 
         val channel = response.bodyAsChannel()
 
-        while (!channel.isClosedForRead) {
+        while (!channel.isClosedForRead && components.size < NEEDED_COMPONENTS.size) {
             try {
                 channel.findString(COMPONENT_START) || break
 
-                val componentName = channel.readUntil('"'.code.toByte())
+                val componentName = channel.readUntil('"'.code.toByte(), maxLength = 200) ?: continue
 
                 // The component name is followed by whitespace and data-automount-props.
                 if (!channel.findString(PROPS_START)) {
@@ -205,7 +305,18 @@ object AppInfoManager {
                     continue
                 }
 
-                val props = channel.readUntil('"'.code.toByte())
+                if (componentName !in NEEDED_COMPONENTS) {
+                    // we don't need it, so we don't even store it
+                    channel.skipUntil('"'.code.toByte())
+                    continue
+                }
+
+                val props = channel.readUntil('"'.code.toByte(), maxLength = MAX_PROPS_LENGTH)
+                if (props == null) {
+                    logger.warn("Props of component $componentName of $id are too large, ignoring them")
+                    channel.skipUntil('"'.code.toByte())
+                    continue
+                }
 
                 try {
                     val json = SharedData.json.parseToJsonElement(decodeHtmlEntities(props))
@@ -219,6 +330,9 @@ object AppInfoManager {
             }
         }
 
+        // we stop reading as soon as we have everything, so cancel the rest of the download
+        channel.cancel(null)
+
         logger.debug("Found ${components.size} automount components for $id")
 
         return components
@@ -228,17 +342,29 @@ object AppInfoManager {
     private val JsonElement.jsonObjectOrNull get() = this as? JsonObject
     private val JsonElement.jsonArrayOrNull get() = this as? JsonArray
 
-    private suspend fun ByteReadChannel.readUntil(delimiter: Byte): String {
-        val result = StringBuilder()
+    private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitiveOrNull?.contentOrNull
+    private fun JsonObject?.flag(key: String): Boolean = this?.get(key)?.jsonPrimitiveOrNull?.booleanOrNull == true
+
+    // reads until the delimiter, returns null (and stops reading) if the value is longer than maxLength
+    private suspend fun ByteReadChannel.readUntil(delimiter: Byte, maxLength: Int): String? {
+        val result = java.io.ByteArrayOutputStream()
 
         while (true) {
             val byte = readByte()
 
             if (byte == delimiter) {
-                return result.toString()
+                // the page is utf-8 (the old implementation converted every byte to a char, which broke non ascii names)
+                return result.toString(Charsets.UTF_8)
             }
+            if (result.size() >= maxLength) return null
 
-            result.append(byte.toInt().toChar())
+            result.write(byte.toInt())
+        }
+    }
+
+    private suspend fun ByteReadChannel.skipUntil(delimiter: Byte) {
+        while (readByte() != delimiter) {
+            // skip
         }
     }
 
@@ -267,24 +393,15 @@ object AppInfoManager {
     private fun decodeHtmlEntities(value: String): String {
         return value
             .replace("&quot;", "\"")
-            .replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&#39;", "'")
             .replace("&apos;", "'")
+            // &amp; must be last, otherwise "&amp;quot;" would become a quote instead of "&quot;"
+            .replace("&amp;", "&")
     }
 
-    suspend fun removeFromCache(appId: String) {
-        if (!cache.contains(appId)) return
-        cacheMutex.withLock {
-            cache.remove(appId)
-        }
-    }
-
-    private fun clearCache() {
-        val current = System.currentTimeMillis()
-        cache.entries.removeIf {
-            current - it.value.second > CACHE_EXPIRATION_TIME
-        }
+    fun removeFromCache(appId: String) {
+        cache.remove(appId)
     }
 }
