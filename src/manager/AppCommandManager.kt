@@ -31,9 +31,6 @@ import kotlin.time.Duration.Companion.minutes
 object AppCommandManager {
     private val logger = LoggerFactory.getLogger(AppCommandManager::class.java)
 
-    private val featureFinderRegex =
-        Regex("""<div\b(?=[^>]*\bdata-automount-component\s*=\s*["']AppDirectoryFeatures["'])(?=[^>]*\bdata-automount-props\s*=\s*["']([^"']*)["'])[^>]*>""".trimIndent())
-
     private const val CORE = "CORE"
 
     @Serializable
@@ -181,8 +178,15 @@ object AppCommandManager {
     }
 
     suspend fun getCommands(appId: String): List<SlashCommand> {
-        val commands = getCommandsIntern(appId).toMutableList()
-        val appInfo = AppInfoManager.getAppInfo(appId)
+        val commands = getCommandsIntern(appId)
+        val appInfo = try {
+            AppInfoManager.getAppInfo(appId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to get app info of $appId for its commands", e)
+            null
+        }
 
         appInfo?.commands?.let { commands.addAll(it) }
 
@@ -263,61 +267,10 @@ object AppCommandManager {
         }
 
         // ok, first shoot missed,
-        // now the second try
+        // the second try (the marketplace page) is done by AppInfoManager, which streams the page instead of loading
+        // the whole page into memory, getCommands merges those commands with ours
 
-        var secondTry: JsonObject? = null
-
-        val url = "https://slack.com/marketplace/$appId"
-        try {
-            val response = SharedData.httpClient.get(url) {
-                if (SharedData.rawDCookie) {
-                    header("Cookie", "d=${Config.SLACK_SESSION_COOKIE}")
-                } else {
-                    cookie("d", Config.SLACK_SESSION_COOKIE)
-                }
-            }
-
-            if (response.status != HttpStatusCode.OK) {
-                logger.error("$url did not return OK status: ${response.status}")
-            } else {
-                val text = response.bodyAsText()
-                val jsonText = featureFinderRegex.find(text)?.groupValues?.get(1)
-                if (jsonText == null) {
-                    logger.warn("Failed to find JSON text in response body for $url")
-                } else {
-                    val json = decodeHtmlEncodedJson(jsonText).jsonObject
-                    val slashCommands = json["slashCommands"]?.jsonArray
-                    if (slashCommands == null) {
-                        secondTry = json
-//                        logger.error("Failed to find slash_commands in JSON for $url: $json")
-                    } else {
-                        val commands = slashCommands.mapNotNullTo(mutableListOf()) { element ->
-                            try {
-                                val jsonObject = element.jsonObject
-                                SlashCommand(
-                                    name = jsonObject["name"]?.jsonPrimitive?.content ?: throw IllegalArgumentException(
-                                        "Missing name field in slash command JSON"
-                                    ),
-                                    description = jsonObject["desc"]?.jsonPrimitive?.content ?: "",
-                                    usageHint = jsonObject["usage"]?.jsonPrimitive?.content ?: ""
-                                )
-                            } catch (e: Exception) {
-                                logger.error("Failed to parse slash command from JSON: $element", e)
-                                null
-                            }
-                        }
-                        if (commands.isNotEmpty()) {
-                            return commands
-                        }
-                        // again if the commands are empty, pass on to the third try (forgot it does not exist)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.error("Failed to fetch commands for app $appId via $url", e)
-        }
-
-        logger.warn("Failed to fetch commands for app $appId: firstTry = $firstTry, secondTry = $secondTry")
+        logger.debug("apps.about.info returned no commands for app $appId: $firstTry")
 
         // if both of our attempts failed, return an empty list
         return mutableListOf()
@@ -375,18 +328,6 @@ object AppCommandManager {
                 .where { AppCommandsTable.command inList commands and (AppCommandsTable.active eq true) }
                 .associate { it[AppCommandsTable.command] to it[AppCommandsTable.app] }
         }
-    }
-
-    private fun decodeHtmlEncodedJson(encoded: String): JsonElement {
-        val decoded = encoded
-            .replace("&quot;", "\"")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&#39;", "'")
-            .replace("&apos;", "'")
-
-        return SharedData.json.parseToJsonElement(decoded)
     }
 
     private inline fun <T> List<T>.firstNotEmpty(
