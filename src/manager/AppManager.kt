@@ -90,7 +90,7 @@ object AppManager {
     }
 
     private suspend fun checkCurrentPendingRequests(requests: List<AppRequested>) {
-        val requestIds = requests.map { it.id }
+        val requestIds = requests.mapTo(HashSet(requests.size)) { it.id }
         val pendingRequests = InstallRequestRepository.allPendingRequests()
 
         if (requests.isEmpty() && pendingRequests.isEmpty()) return
@@ -245,6 +245,7 @@ object AppManager {
         val scopeRules = InstallRequestRepository.getScopeRules()
         val userRules = InstallRequestRepository.getCustomUserRules(request.user.id)
         val isAppRestricted = InstallRequestRepository.isAppRestricted(request.app.id)
+        val isAppProtected = InstallRequestRepository.isAppProtected(request.app.id)
         val previousRequests =
             InstallRequestRepository.findPreviousRequests(request.app.id, request.user.id, request.id)
         val appInfo = if (AppInfoManager.canBeUsed()) AppInfoManager.getAppInfo(request.app.id) else null
@@ -280,6 +281,7 @@ object AppManager {
             scopeRules = scopeRules,
             userRules = userRules,
             isAppRestricted = isAppRestricted,
+            isAppProtected = isAppProtected,
             previousRequests = previousRequests,
             commandsAllReadyInUse = commandsAllReadyInUse,
             commands = appCommands,
